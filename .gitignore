@@ -1,0 +1,7 @@
+# Editor / OS noise
+.DS_Store
+Thumbs.db
+
+# The pre-existing, commit-less git repo that used to live in accounting-app/.
+# It was moved aside rather than deleted; see the Phase 6 hand-off notes.
+accounting-app/.git.bak/
