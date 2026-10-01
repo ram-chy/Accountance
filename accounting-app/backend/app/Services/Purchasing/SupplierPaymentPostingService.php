@@ -136,7 +136,7 @@ class SupplierPaymentPostingService
                 ],
             );
 
-            $this->posting->post($journal, $actor);
+            $this->posting->post($journal, $actor, 'payment_date');
 
             $fresh->forceFill([
                 'status' => PaymentStatus::Posted->value,

@@ -4,9 +4,11 @@ namespace App\Providers;
 
 use App\Models\Account;
 use App\Models\AccountingPeriod;
+use App\Models\CashBankTransaction;
 use App\Models\Company;
 use App\Models\Customer;
 use App\Models\CustomerReceipt;
+use App\Models\FinancialYear;
 use App\Models\Journal;
 use App\Models\PurchaseBill;
 use App\Models\SalesInvoice;
@@ -15,6 +17,7 @@ use App\Models\SupplierPayment;
 use App\Models\User;
 use App\Policies\AccountingPeriodPolicy;
 use App\Policies\AccountPolicy;
+use App\Policies\CashBankTransactionPolicy;
 use App\Policies\CompanyPolicy;
 use App\Policies\CustomerPolicy;
 use App\Policies\CustomerReceiptPolicy;
@@ -61,6 +64,14 @@ class AppServiceProvider extends ServiceProvider
         Gate::policy(Account::class, AccountPolicy::class);
         Gate::policy(Journal::class, JournalPolicy::class);
         Gate::policy(AccountingPeriod::class, AccountingPeriodPolicy::class);
+        /*
+         | FinancialYear reuses AccountingPeriodPolicy. The two models are one
+         | hierarchy governed by one permission set, so a second policy class would
+         | decide the same questions and the two would drift apart. The methods are
+         | named per action (createYear, closeYear, ...) so the mapping stays
+         | obvious at the call site.
+         */
+        Gate::policy(FinancialYear::class, AccountingPeriodPolicy::class);
 
         /*
          | Phase 5 policies.
@@ -76,6 +87,20 @@ class AppServiceProvider extends ServiceProvider
         Gate::policy(PurchaseBill::class, PurchaseBillPolicy::class);
         Gate::policy(CustomerReceipt::class, CustomerReceiptPolicy::class);
         Gate::policy(SupplierPayment::class, SupplierPaymentPolicy::class);
+
+        /*
+         | Phase 7 policy.
+         |
+         | CashBankTransaction gets a policy of its own because it is its own model
+         | and needs its own abilities. Cash/bank *account configuration* does not
+         | get one: it acts on Account, which already has AccountPolicy, and a
+         | policy is resolved per model class - a second policy for Account could
+         | never be reached through authorize() and would look like it enforced
+         | something while enforcing nothing. Those endpoints check their
+         | permission directly, with the membership half of the check already
+         | handled by the scoped `account` route binding below.
+         */
+        Gate::policy(CashBankTransaction::class, CashBankTransactionPolicy::class);
 
         /*
          | Accounting route binding.
@@ -127,6 +152,11 @@ class AppServiceProvider extends ServiceProvider
         $scoped('journal', Journal::class);
         $scoped('period', AccountingPeriod::class);
 
+        // Phase 8. Same property as `period`: a financial year reaching a
+        // controller is already known to belong to the active company, so no
+        // controller re-asserts it and a foreign id 404s before any method runs.
+        $scoped('financialYear', FinancialYear::class);
+
         // Phase 5.
         $scoped('customer', Customer::class);
         $scoped('supplier', Supplier::class);
@@ -134,6 +164,12 @@ class AppServiceProvider extends ServiceProvider
         $scoped('bill', PurchaseBill::class);
         $scoped('receipt', CustomerReceipt::class);
         $scoped('payment', SupplierPayment::class);
+
+        // Phase 7. Same property as Phase 5's bindings: a CashBankTransaction
+        // resolved here is already known to belong to the active company, so no
+        // controller or service re-asserts it and a cross-company id 404s before
+        // the controller runs.
+        $scoped('transaction', CashBankTransaction::class);
     }
 
     /**

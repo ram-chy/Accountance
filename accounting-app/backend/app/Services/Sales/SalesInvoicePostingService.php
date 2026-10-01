@@ -180,7 +180,7 @@ class SalesInvoicePostingService
             );
 
             // 8. Post through the single existing writer.
-            $this->posting->post($journal, $actor);
+            $this->posting->post($journal, $actor, 'invoice_date');
 
             /*
              * 9 & 10. The link and the status, in one statement so there is no

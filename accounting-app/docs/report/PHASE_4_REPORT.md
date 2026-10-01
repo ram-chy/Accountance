@@ -276,6 +276,11 @@ would force one permission for two different questions.
 
 There is no period reopen route. Closing is one-way by design.
 
+> **Superseded by Phase 8.** Phase 8 adds `POST /api/accounting/periods/{period}/reopen`
+> under a new `accounting.periods.reopen` permission held by Admin only. The rest of
+> this report describes Phase 4 as delivered and is left unaltered. See
+> `PHASE_8_REPORT.md`.
+
 ## 7. Service Layer
 
 ### AccountService
@@ -303,6 +308,9 @@ flips `OPEN` → `CLOSED` and is a one-way transition: there is no reopen, and
 closing an already-closed period is rejected with `422` rather than silently
 succeeding, so a client that retries a close learns that it has nothing left to
 do.
+
+> **Superseded by Phase 8:** `reopen()` now exists, as does close-audit
+> (`closed_by`/`closed_at`), and a period belongs to a `FinancialYear`.
 
 Adjacent periods do not overlap — `end_date` of one may equal `start_date` of the
 next — and a period may be narrowed but not widened into another.
@@ -460,7 +468,7 @@ Full suite: **303 tests, 1055 assertions, all passing.** Unit suite: 39 tests,
 | `JournalLifecycleTest` | 12 | 68 | Draft create/read/update/delete, per-company numbering, no reuse after delete, listing filters, cross-company account reference, dating outside a period |
 | `JournalValidationTest` | 15 | 39 | Line rules, exact balance difference, precision and half-up rounding, round-to-zero rejection, service-level refusal without writes, and MySQL constraint enforcement |
 | `PostingTest` | 11 | 57 | Happy path, server-assigned `posted_by`, edit/delete immutability, duplicate post (409), missing/closed period, inactive account, imbalance introduced after drafting, no line duplication, cross-company post |
-| `AccountingPeriodTest` | 15 | 43 | CRUD, overlap and adjacency, narrowing vs widening, name uniqueness, closing, no reopen, permissions, per-company isolation |
+| `AccountingPeriodTest` | 15 | 43 | CRUD, overlap and adjacency, narrowing vs widening, name uniqueness, closing, closed periods not editable, permissions, per-company isolation |
 | `LedgerReportTest` | 15 | 121 | Debit/credit normal columns, contra sign, over-balanced negatives, draft exclusion, trial-balance footing and placement, company isolation, date ranges, running statements, ledger permission |
 | `CompanyIsolationTest` | 10 | 30 | Cross-company read/write/borrow attempts on every accounting resource, non-member refusal, and the per-company code-uniqueness control case |
 | `AccountingAuthorizationTest` | 15 | 63 | Full role matrix over HTTP, unauthenticated access, Manager read-only, Staff excluded |
@@ -598,6 +606,9 @@ Deliberately out of scope for this phase:
 - No currency conversion, budgets, or multi-currency reporting.
 - No default chart-of-accounts seeding.
 - No period reopening, and no period-end auto-close.
+  - Period reopening was delivered in Phase 8 (`accounting.periods.reopen`, Admin
+    only). Period-end auto-close remains unimplemented: nothing in this system
+    advances a calendar on its own, so closing stays an explicit human act.
 - `journal_lines` has no `company_id` by design; any future denormalisation
   would reintroduce the possibility of a company mismatch.
 - The transaction-safety guarantee for posting is enforced with

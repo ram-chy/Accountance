@@ -3,6 +3,7 @@
 namespace Database\Factories;
 
 use App\Enums\AccountType;
+use App\Enums\CashBankKind;
 use App\Enums\NormalBalance;
 use App\Models\Account;
 use App\Models\Company;
@@ -33,6 +34,12 @@ class AccountFactory extends Factory
             'code' => (string) fake()->unique()->numberBetween(1000, 9999),
             'name' => fake()->unique()->words(2, true),
             'account_type' => AccountType::Asset->value,
+            /*
+             * Null by default: most accounts in a chart of accounts are not cash
+             * or bank, and a factory that produced cash accounts by default would
+             * make every unrelated accounting test quietly Phase 7.
+             */
+            'cash_bank_kind' => null,
             'normal_balance' => null,
             'description' => null,
             'is_active' => true,
@@ -95,6 +102,36 @@ class AccountFactory extends Factory
     public function normalBalance(NormalBalance $balance): static
     {
         return $this->state(fn () => ['normal_balance' => $balance->value]);
+    }
+
+    /**
+     * An account that holds physical cash, and is therefore eligible for a
+     * cash/bank transaction.
+     */
+    public function cash(): static
+    {
+        return $this->asset()->cashBank(CashBankKind::Cash);
+    }
+
+    /**
+     * An account that represents a bank account, and is therefore eligible for a
+     * cash/bank transaction.
+     */
+    public function bank(): static
+    {
+        return $this->asset()->cashBank(CashBankKind::Bank);
+    }
+
+    /**
+     * Mark the account with a cash/bank classification.
+     *
+     * Separate from cash() and bank() so a test can build, say, a liability-typed
+     * account that still carries a kind - which is how the "the kind is the only
+     * criterion" rule gets exercised rather than assumed.
+     */
+    public function cashBank(CashBankKind $kind): static
+    {
+        return $this->state(fn () => ['cash_bank_kind' => $kind->value]);
     }
 
     public function inactive(): static

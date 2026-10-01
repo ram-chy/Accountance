@@ -123,4 +123,30 @@ return [
         ],
     ],
 
+    /*
+    |--------------------------------------------------------------------------
+    | Fiscal Year
+    |--------------------------------------------------------------------------
+    |
+    | Phase 8 adds financial years above accounting periods. No fiscal
+    | convention existed before this key, so April is the default the brief
+    | describes rather than a rule this system already followed: a year runs
+    | from the 1st of this month to the last day of the month eleven places
+    | later, so 4 means 2027-04-01 to 2028-03-31.
+    |
+    | This is deliberately a single integer and not a fiscal-calendar engine.
+    | It is the smallest mechanism that makes period generation configurable,
+    | and every company in this deployment shares one calendar, so a per-company
+    | calendar would be storage for a distinction nobody has asked for.
+    |
+    | Changing it affects period *generation* only. It never rewrites an
+    | existing financial year or period, because those are dated facts that
+    | already have journal history attached to them.
+    |
+    */
+
+    'fiscal_year' => [
+        'start_month' => (int) env('FISCAL_YEAR_START_MONTH', 4),
+    ],
+
 ];

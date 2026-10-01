@@ -3,6 +3,7 @@
 namespace App\Http\Requests\Accounting;
 
 use App\Enums\AccountType;
+use App\Enums\CashBankKind;
 use App\Enums\NormalBalance;
 use App\Models\Account;
 use App\Models\Company;
@@ -57,6 +58,12 @@ class UpdateAccountRequest extends FormRequest
                     ->ignore($account->getKey()),
             ],
             'account_type' => ['sometimes', 'string', Rule::in(AccountType::values())],
+            // Phase 7. `nullable` rather than just `sometimes`: sending
+            // cash_bank_kind: null is how a user removes a classification from an
+            // account that has never been used, and without `nullable` that
+            // request would be rejected as an invalid value rather than clearing
+            // the field.
+            'cash_bank_kind' => ['sometimes', 'nullable', 'string', Rule::in(CashBankKind::values())],
             'normal_balance' => ['sometimes', 'nullable', 'string', Rule::in(NormalBalance::values())],
             'description' => ['sometimes', 'nullable', 'string', 'max:1000'],
             'parent_id' => [

@@ -16,9 +16,19 @@ use Illuminate\Support\Carbon;
  * name and the intent - it is meant for the cash/bank accounts a receipt or
  * payment settles into.
  *
- * It is not type-restricted. Nothing in Phase 5 requires a payment account to be
- * an ASSET in the schema, so refusing a liability-typed account here would
- * invent a rule; the report returns whichever account it is given.
+ * It is still not type-restricted, and that remains correct: this report answers
+ * "show me the ledger for this account", and the Phase 6 report response contract
+ * is not changed here to make it narrower.
+ *
+ * Corrected in Phase 7. This docblock previously claimed that "nothing in Phase 5
+ * requires a payment account to be an ASSET in the schema". That was not true:
+ * TransactionAccountResolver::payment() accepts only AccountType::Asset, and both
+ * the customer_receipts and supplier_payments migrations state that
+ * payment_account_id must be an ASSET account. The *report* is unrestricted; the
+ * *transaction* path that feeds it is not. The distinction matters now that
+ * accounts carry an explicit cash_bank_kind, because a reader relying on the old
+ * wording would conclude that any account could be settled into, and would be
+ * wrong.
  */
 class CashBankReportService
 {

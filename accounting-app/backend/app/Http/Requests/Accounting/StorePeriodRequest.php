@@ -9,11 +9,17 @@ use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
 
 /**
- * Create an accounting period in the active company.
+ * Create an accounting period.
  *
- * No status field: a period is always created OPEN. Allowing a request to
- * create a period already CLOSED would produce a period no journal could ever
- * post into, which is never what the user meant.
+ * financial_year_id is optional. When it is absent the period is attached to the
+ * fiscal year derived from the configured start month, and that year is created
+ * if the company has no calendar yet. Requiring it would force every client to
+ * resolve a date into a year before it could record a period, and the derivation
+ * is not a business decision - it follows from config.
+ *
+ * When it IS supplied it is validated against this company only, because a
+ * foreign key from a request body is not a scope assertion. The service repeats
+ * the check, because it is the layer that must hold for non-HTTP callers too.
  */
 class StorePeriodRequest extends FormRequest
 {
@@ -42,10 +48,16 @@ class StorePeriodRequest extends FormRequest
              * start/end ordering and cross-period overlap are both enforced in
              * AccountingPeriodService rather than only here, because the service
              * must hold for non-HTTP callers too. The two checks overlap by
-             * design: the rule gives a fast field-level error, the service is
-             * the authority and also closes the concurrency window.
+             * design: the rule gives a fast field-level error, the service is the
+             * authority and also closes the concurrency window.
              */
             'end_date' => ['required', 'date_format:Y-m-d', 'after_or_equal:start_date'],
+            'financial_year_id' => [
+                'sometimes',
+                'nullable',
+                'integer',
+                Rule::exists('financial_years', 'id')->where('company_id', $company->getKey()),
+            ],
         ];
     }
 
@@ -57,6 +69,7 @@ class StorePeriodRequest extends FormRequest
         return [
             'end_date.after_or_equal' => 'The period end date must not be before its start date.',
             'name.unique' => 'A period with this name already exists for the selected company.',
+            'financial_year_id.exists' => 'The selected financial year does not belong to this company.',
         ];
     }
 }

@@ -63,6 +63,7 @@ class DocumentNumberSequence
             DocumentNumberType::Bill => 'BILL-',
             DocumentNumberType::Receipt => 'RCPT-',
             DocumentNumberType::Payment => 'PAY-',
+            DocumentNumberType::CashBankTransaction => 'CBN-',
         };
 
         return $prefix.str_pad((string) $number, 6, '0', STR_PAD_LEFT);

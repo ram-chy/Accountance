@@ -128,7 +128,7 @@ class PurchaseBillPostingService
                 ],
             );
 
-            $this->posting->post($journal, $actor);
+            $this->posting->post($journal, $actor, 'bill_date');
 
             $fresh->forceFill([
                 'status' => TransactionStatus::Posted->value,

@@ -61,6 +61,94 @@ class TransactionAccountResolver
     ];
 
     /**
+     * Resolve an account for a cash/bank transaction, requiring it to be
+     * classified as holding cash or as being a bank account.
+     *
+     * Deliberately not one of the ROLES above. That table answers "which account
+     * *type* is appropriate", and type is not the question here: a bank account
+     * and a receivable are both ASSET, and only the first may take part in a
+     * transfer. Adding it to the table would mean adding an accepted-type set
+     * that is correct for every account of that type and still insufficient,
+     * because the real test is accounts.cash_bank_kind.
+     *
+     * The same three checks every other role gets - ownership, active status,
+     * appropriateness - are applied in the same order and produce the same shape
+     * of message, so a caller cannot tell which service decided and a user cannot
+     * be told about an account in another company.
+     *
+     * @throws ValidationException
+     */
+    public function cashBank(Company $company, int $accountId, string $field): Account
+    {
+        $account = Account::query()
+            ->where('company_id', $company->getKey())
+            ->whereKey($accountId)
+            ->first();
+
+        // Same reasoning as resolve(): a company-scoped miss cannot distinguish
+        // "no such account" from "another company's", and must not.
+        if ($account === null) {
+            throw ValidationException::withMessages([
+                $field => 'The selected account does not belong to the active company.',
+            ]);
+        }
+
+        if (! $account->is_active) {
+            throw ValidationException::withMessages([
+                $field => "Account [{$account->code} {$account->name}] is inactive and cannot be used on a transaction.",
+            ]);
+        }
+
+        if (! $account->isCashBankAccount()) {
+            throw ValidationException::withMessages([
+                $field => sprintf(
+                    'Account [%s %s] is not a cash or bank account. '
+                    .'Mark it as CASH or BANK before using it on a cash/bank transaction.',
+                    $account->code,
+                    $account->name
+                ),
+            ]);
+        }
+
+        return $account;
+    }
+
+    /**
+     * Resolve the non-cash/bank side of a deposit or withdrawal.
+     *
+     * This is the "counter-account" a user's own money arrives from or is sent
+     * to: capital introduced, a bank charge, an expense. Any active account in
+     * the company may serve, because which one is correct depends entirely on the
+     * business transaction and this phase refuses to guess. That refusal is the
+     * reason this method exists as a lookup rather than a rule: it checks that
+     * the account exists, belongs here and is usable, and expresses no opinion
+     * about what it should be.
+     *
+     * @throws ValidationException
+     */
+    public function offset(Company $company, int $accountId, string $field): Account
+    {
+        $account = Account::query()
+            ->where('company_id', $company->getKey())
+            ->whereKey($accountId)
+            ->first();
+
+        if ($account === null) {
+            throw ValidationException::withMessages([
+                $field => 'The selected account does not belong to the active company.',
+            ]);
+        }
+
+        if (! $account->is_active) {
+            throw ValidationException::withMessages([
+                $field => "Account [{$account->code} {$account->name}] is inactive and cannot be used on a transaction.",
+            ]);
+        }
+
+        return $account;
+    }
+
+    /**
      * Human labels for the error message, so "is not a revenue account" reads
      * as a statement about the account's purpose rather than an enum value.
      *

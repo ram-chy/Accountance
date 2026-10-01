@@ -9,10 +9,12 @@ use App\Models\Company;
 use App\Models\PurchaseBill;
 use App\Models\Supplier;
 use App\Models\User;
+use App\Services\Accounting\AccountingPeriodService;
 use App\Services\Accounting\DocumentCalculator;
 use App\Services\Accounting\DocumentNumberSequence;
 use App\Services\Accounting\TransactionAccountResolver;
 use App\Support\Money;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
@@ -33,6 +35,7 @@ class PurchaseBillService
 {
     public function __construct(
         private readonly DocumentNumberSequence $numbers,
+        private readonly AccountingPeriodService $periods,
         private readonly DocumentCalculator $calculator,
         private readonly TransactionAccountResolver $accounts,
         private readonly SupplierService $suppliers,
@@ -84,6 +87,15 @@ class PurchaseBillService
 
             if (array_key_exists('supplier_id', $data)) {
                 $fresh->supplier_id = $this->resolveSupplier($company, $data['supplier_id'])->getKey();
+            }
+
+            /*
+             * Phase 8: re-dating a draft may not target a closed period. See
+             * JournalService::updateDraft for why this is checked on the date
+             * only, and why it is checked at all.
+             */
+            if (array_key_exists('bill_date', $data)) {
+                $this->periods->assertDateNotClosed($company, Carbon::parse($data['bill_date']), 'bill_date');
             }
 
             // Absent and explicit null are different requests; see the same

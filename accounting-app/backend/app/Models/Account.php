@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Enums\AccountType;
+use App\Enums\CashBankKind;
 use App\Enums\NormalBalance;
 use Database\Factories\AccountFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
@@ -10,6 +11,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 /**
  * A single line in a company's chart of accounts.
@@ -25,6 +27,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
     'code',
     'name',
     'account_type',
+    'cash_bank_kind',
     'normal_balance',
     'description',
     'parent_id',
@@ -42,11 +45,19 @@ class Account extends Model
      * posted to, and that transition goes through AccountService so it can be
      * validated and recorded - the same treatment Phase 3 gave Company::is_active.
      * Lifecycle columns are therefore written with forceFill() by the service.
+     *
+     * `cash_bank_kind` IS fillable, which is the opposite decision and for a
+     * different reason: it is not a lifecycle flag but a classification of what
+     * the account *is*, set at creation like account_type and code. It is
+     * constrained to CASH or BANK (or null) at both the request layer and the
+     * schema, and an account may only change it through the same validated path
+     * that changes its name.
      */
     protected function casts(): array
     {
         return [
             'account_type' => AccountType::class,
+            'cash_bank_kind' => CashBankKind::class,
             'normal_balance' => NormalBalance::class,
             'is_active' => 'boolean',
             'is_system' => 'boolean',
@@ -71,6 +82,37 @@ class Account extends Model
     public function journalLines(): HasMany
     {
         return $this->hasMany(JournalLine::class);
+    }
+
+    /**
+     * The bank details for this account, if it is a bank account.
+     *
+     * hasOne rather than hasMany because bank_accounts.account_id is unique: an
+     * account either has its bank details or it does not, and the database
+     * enforces that there is never a second set.
+     */
+    public function bankAccount(): HasOne
+    {
+        return $this->hasOne(BankAccount::class);
+    }
+
+    /**
+     * Is this account eligible to take part in a cash/bank transaction?
+     *
+     * The single definition of the answer, used by the eligibility endpoint, by
+     * the transaction service and by the posting service, so those three cannot
+     * drift into disagreeing about which accounts are cash.
+     *
+     * cash_bank_kind is the only criterion. It is deliberately not additionally
+     * requiring an ASSET account_type, even though cash and bank are assets: that
+     * would be a second rule to maintain, and one that could reject a legitimate
+     * account the moment someone corrected a mistyped account_type. The kind is
+     * the classification the user declared, and CashBankAccountService is where
+     * setting it is validated.
+     */
+    public function isCashBankAccount(): bool
+    {
+        return $this->cash_bank_kind !== null;
     }
 
     /**

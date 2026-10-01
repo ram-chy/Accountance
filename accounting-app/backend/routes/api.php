@@ -2,6 +2,9 @@
 
 use App\Http\Controllers\Api\Accounting\AccountController;
 use App\Http\Controllers\Api\Accounting\AccountingPeriodController;
+use App\Http\Controllers\Api\Accounting\CashBankAccountController;
+use App\Http\Controllers\Api\Accounting\CashBankTransactionController;
+use App\Http\Controllers\Api\Accounting\FinancialYearController;
 use App\Http\Controllers\Api\Accounting\JournalController;
 use App\Http\Controllers\Api\Accounting\LedgerController;
 use App\Http\Controllers\Api\Accounting\ReportController;
@@ -222,7 +225,9 @@ Route::middleware(['auth:api', 'auth.fresh', 'company.context', 'throttle:api'])
         });
 
         /*
-        | Accounting periods. No reopen route: closing is one-way in Phase 4.
+        | Accounting periods. Phase 8 adds reopen as a separate, separately
+        | authorized act: closing is the control, reopening is the privileged
+        | undoing of it, and the two must be revocable independently.
         */
         Route::prefix('accounting/periods')->group(function () {
             Route::get('/', [AccountingPeriodController::class, 'index'])->name('accounting.periods.index');
@@ -231,6 +236,25 @@ Route::middleware(['auth:api', 'auth.fresh', 'company.context', 'throttle:api'])
             Route::put('/{period}', [AccountingPeriodController::class, 'update'])->name('accounting.periods.update');
             Route::post('/{period}/close', [AccountingPeriodController::class, 'close'])
                 ->name('accounting.periods.close');
+            Route::post('/{period}/reopen', [AccountingPeriodController::class, 'reopen'])
+                ->name('accounting.periods.reopen');
+        });
+
+        /*
+        | Financial years (Phase 8). The year is the container periods live in and
+        | the thing period generation walks, so its routes sit next to theirs.
+        | Generation is a POST to a sub-resource rather than a field on the year
+        | because it is an action that may be repeated, not a state to set.
+        */
+        Route::prefix('accounting/financial-years')->group(function () {
+            Route::get('/', [FinancialYearController::class, 'index'])->name('accounting.financial_years.index');
+            Route::post('/', [FinancialYearController::class, 'store'])->name('accounting.financial_years.store');
+            Route::get('/{financialYear}', [FinancialYearController::class, 'show'])->name('accounting.financial_years.show');
+            Route::put('/{financialYear}', [FinancialYearController::class, 'update'])->name('accounting.financial_years.update');
+            Route::post('/{financialYear}/periods/generate', [FinancialYearController::class, 'generatePeriods'])
+                ->name('accounting.financial_years.periods.generate');
+            Route::post('/{financialYear}/close', [FinancialYearController::class, 'close'])
+                ->name('accounting.financial_years.close');
         });
 
         /*
@@ -406,5 +430,91 @@ Route::middleware(['auth:api', 'auth.fresh', 'company.context', 'throttle:api'])
             Route::put('/{payment}', [SupplierPaymentController::class, 'update'])->name('supplier.payments.update');
             Route::delete('/{payment}', [SupplierPaymentController::class, 'destroy'])->name('supplier.payments.delete');
             Route::post('/{payment}/post', [SupplierPaymentController::class, 'post'])->name('supplier.payments.post');
+        });
+    });
+
+/*
+|--------------------------------------------------------------------------
+| Cash & Banking (Phase 7)
+|--------------------------------------------------------------------------
+|
+| Cash/bank transactions: deposits, withdrawals and transfers between the
+| company's cash and bank accounts.
+|
+| Three create endpoints rather than one endpoint with a `transaction_type`
+| field, and the reason is the accounting rather than the REST. The type decides
+| which side of the account pair must itself be a cash/bank account, and an
+| external deposit additionally needs an offset account that no part of this
+| system can guess. If the type came from the payload, the eligibility rule would
+| be validated against a client-supplied value; making the type a property of the
+| route means the rule is applied to something the client did not choose.
+|
+| No route accepts a company id, a journal id, a balance or a status. The scope
+| comes from the caller's company context, the journal is produced by the posting
+| service, and the status is a lifecycle the client reads rather than sets.
+|
+| Lifecycle is on separate paths, as for every other document here: PUT can never
+| post a transaction, POST /post can never edit one, because each calls a service
+| that has no code path to the other operation.
+|
+| Cash/bank account *configuration* is deliberately not under this prefix. It acts
+| on accounts in the chart of accounts, so it sits beside /api/accounts and binds
+| the `account` parameter, which was already scoped to the active company in Phase
+| 4. Splitting it out here would have needed a second binding for the same model
+| to say the same thing twice.
+|
+| There is no cash/bank ledger endpoint. GET /api/accounting/reports/cash-bank in
+| the group above is the read layer, and it already reflects every posted journal
+| line; adding a second one would be a second implementation of the same running
+| balance, free to drift from the first.
+*/
+Route::middleware(['auth:api', 'auth.fresh', 'company.context', 'throttle:api'])
+    ->group(function () {
+        /*
+        | Cash and bank account configuration. Classification plus optional bank
+        | metadata for an existing account; creating the account itself is
+        | /api/accounts, because a bank account is an ordinary account in the
+        | chart of accounts with a classification on it.
+        |
+        | No DELETE on the account itself and no route that deactivates it: both
+        | belong to AccountController. The /bank-details route removes operational
+        | metadata only, and leaves the classification alone.
+        */
+        Route::prefix('cash-bank-accounts')->group(function () {
+            Route::get('/', [CashBankAccountController::class, 'index'])
+                ->name('cash-bank.accounts.index');
+            Route::put('/{account}', [CashBankAccountController::class, 'update'])
+                ->name('cash-bank.accounts.update');
+            Route::delete('/{account}/bank-details', [CashBankAccountController::class, 'destroyBankDetails'])
+                ->name('cash-bank.accounts.bank-details.destroy');
+            Route::post('/{account}/activate', [CashBankAccountController::class, 'activate'])
+                ->name('cash-bank.accounts.activate');
+            Route::post('/{account}/deactivate', [CashBankAccountController::class, 'deactivate'])
+                ->name('cash-bank.accounts.deactivate');
+        });
+
+        /*
+        | Cash and bank transactions.
+        */
+        Route::prefix('cash-bank-transactions')->group(function () {
+            Route::get('/', [CashBankTransactionController::class, 'index'])
+                ->name('cash-bank.transactions.index');
+
+            // One path per movement type. The path names the accounting.
+            Route::post('/deposits', [CashBankTransactionController::class, 'storeDeposit'])
+                ->name('cash-bank.transactions.deposit');
+            Route::post('/withdrawals', [CashBankTransactionController::class, 'storeWithdrawal'])
+                ->name('cash-bank.transactions.withdrawal');
+            Route::post('/transfers', [CashBankTransactionController::class, 'storeTransfer'])
+                ->name('cash-bank.transactions.transfer');
+
+            Route::get('/{transaction}', [CashBankTransactionController::class, 'show'])
+                ->name('cash-bank.transactions.show');
+            Route::put('/{transaction}', [CashBankTransactionController::class, 'update'])
+                ->name('cash-bank.transactions.update');
+            Route::delete('/{transaction}', [CashBankTransactionController::class, 'destroy'])
+                ->name('cash-bank.transactions.delete');
+            Route::post('/{transaction}/post', [CashBankTransactionController::class, 'post'])
+                ->name('cash-bank.transactions.post');
         });
     });

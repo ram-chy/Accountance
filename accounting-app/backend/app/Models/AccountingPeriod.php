@@ -18,11 +18,17 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * in a period running 2027-01-01 to 2027-01-31. Treating them as inclusive is
  * what allows consecutive periods (January then February) not to be reported as
  * overlapping, since 2027-01-31 and 2027-02-01 do not intersect.
+ *
+ * Phase 8 adds financialYear, so a period now knows which fiscal year owns it.
+ * The column is nullable in the schema only so the Phase 8 migration can
+ * backfill periods that already existed; every period created or generated from
+ * now on carries a year, and AccountingPeriodService::create() requires one.
  */
 #[Fillable([
     'name',
     'start_date',
     'end_date',
+    'financial_year_id',
 ])]
 class AccountingPeriod extends Model
 {
@@ -31,8 +37,10 @@ class AccountingPeriod extends Model
 
     /**
      * `status` is absent on purpose: it moves only through
-     * AccountingPeriodService::close(), which validates that the period is open
-     * and holds the row while it changes.
+     * AccountingPeriodService::close() and ::reopen(), which validate the
+     * transition and hold the row while it happens. `closed_by`/`closed_at` are
+     * absent for the same reason and are written by those two methods, never by a
+     * request body.
      */
     protected function casts(): array
     {
@@ -40,12 +48,38 @@ class AccountingPeriod extends Model
             'start_date' => 'date',
             'end_date' => 'date',
             'status' => PeriodStatus::class,
+            'closed_at' => 'datetime',
+            'reopened_at' => 'datetime',
         ];
     }
 
     public function company(): BelongsTo
     {
         return $this->belongsTo(Company::class);
+    }
+
+    public function financialYear(): BelongsTo
+    {
+        return $this->belongsTo(FinancialYear::class, 'financial_year_id');
+    }
+
+    /**
+     * Who closed it. Meaningful only while the period is closed; reopen() clears
+     * the pair rather than leaving a stale attribution on an open period.
+     */
+    public function closer(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'closed_by');
+    }
+
+    /**
+     * Who reopened it, and when. Set by reopen() and cleared again by the next
+     * close, so it describes the most recent transition of that kind rather than
+     * an attempt log.
+     */
+    public function reopener(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'reopened_by');
     }
 
     public function journals(): HasMany

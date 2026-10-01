@@ -156,7 +156,7 @@ class CustomerReceiptPostingService
                 ],
             );
 
-            $this->posting->post($journal, $actor);
+            $this->posting->post($journal, $actor, 'receipt_date');
 
             $fresh->forceFill([
                 'status' => PaymentStatus::Posted->value,

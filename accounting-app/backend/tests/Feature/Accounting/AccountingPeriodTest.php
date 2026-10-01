@@ -271,15 +271,18 @@ class AccountingPeriodTest extends TestCase
     }
 
     #[Test]
-    public function a_closed_period_cannot_be_reopened(): void
+    public function a_closed_period_cannot_be_edited_through_the_update_route(): void
     {
         $user = $this->admin();
         $company = $this->createCompanyFor($user);
 
         $period = $this->makePeriodFor($company, '2027-01-15', 'January 2027', closed: true);
 
-        // There is no reopen route at all: the fix is to change the status in the
-        // database, by whoever holds that authority outside the API.
+        // Reopen is a route of its own since Phase 8, behind accounting.periods.reopen,
+        // and it is the only way back to OPEN. Renaming a closed period is not one of
+        // them: the closed period is the record of a finished month, and editing it
+        // behind the permission that guards reopen would be the same action by a
+        // quieter route.
         $response = $this->actingAsJwt($user)
             ->withCompanyContext($company)
             ->putJson("/api/accounting/periods/{$period->getKey()}", [

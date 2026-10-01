@@ -5,12 +5,16 @@ namespace App\Enums;
 /**
  * Accounting period status.
  *
- * A period is OPEN until it is closed. Closing is one-way in Phase 4: there is
- * no reopen permission and no reopen endpoint, so a closed period cannot be
- * reopened by any user. That is deliberate - reopening is a privileged act that
- * should require an explicit authority, and this phase does not create one. See
- * the Phase 4 report under "Known Limitations" for the consequence: a period
- * closed by mistake needs a database-level correction by an administrator.
+ * A period is OPEN until it is closed. Closing was one-way in Phase 4, when
+ * there was no reopen permission and no reopen endpoint; the Phase 4 report
+ * recorded the consequence as a period closed by mistake needing a
+ * database-level correction. Phase 8 resolves that gap with an explicit,
+ * separately authorized reopen operation guarded by
+ * `accounting.periods.reopen`, held by Admin only.
+ *
+ * Two states still: a reopened period is OPEN, not REOPENED, so no reader has to
+ * know what a third state means. The history of having been closed is audit
+ * information on the period's own close/reopen timestamps, not a status.
  */
 enum PeriodStatus: string
 {

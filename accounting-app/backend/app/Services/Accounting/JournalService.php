@@ -10,6 +10,7 @@ use App\Models\Journal;
 use App\Models\JournalLine;
 use App\Models\User;
 use App\Support\Money;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
@@ -26,6 +27,7 @@ class JournalService
 {
     public function __construct(
         private readonly JournalNumberSequence $numbers,
+        private readonly AccountingPeriodService $periods,
     ) {}
 
     /**
@@ -100,6 +102,27 @@ class JournalService
              * operations serialise and exactly one of them sees status = DRAFT.
              */
             $fresh = $this->lockDraftForEditing($journal);
+
+            /*
+             * Phase 8: the accounting date may not be moved into a closed period.
+             *
+             * Checked only when journal_date is actually in the payload. A draft
+             * created while its month was open and never re-dated stays editable
+             * for its description and lines - a draft is not yet accounting data,
+             * and locking it entirely the day its month closes would make a typo in
+             * the description unfixable except by delete-and-recreate. What is
+             * refused is moving accounting data into a closed date.
+             *
+             * This runs inside the transaction and after the draft lock, so the
+             * check cannot be overtaken by a concurrent close.
+             */
+            if (array_key_exists('journal_date', $data)) {
+                $this->periods->assertDateNotClosed(
+                    $company,
+                    Carbon::parse($data['journal_date']),
+                    'journal_date',
+                );
+            }
 
             $fresh->fill(array_filter([
                 'journal_date' => $data['journal_date'] ?? null,

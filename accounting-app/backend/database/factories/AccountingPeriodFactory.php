@@ -5,6 +5,7 @@ namespace Database\Factories;
 use App\Enums\PeriodStatus;
 use App\Models\AccountingPeriod;
 use App\Models\Company;
+use App\Models\FinancialYear;
 use Illuminate\Database\Eloquent\Factories\Factory;
 use Illuminate\Support\Carbon;
 
@@ -29,6 +30,19 @@ class AccountingPeriodFactory extends Factory
             'end_date' => $start->copy()->endOfYear()->toDateString(),
             'status' => PeriodStatus::Open->value,
         ];
+    }
+
+    /**
+     * Attach the period to a specific financial year.
+     *
+     * Optional in the factory on purpose. AccountingPeriodService::create() will
+     * derive the right year from the configured fiscal calendar when a caller
+     * does not name one, so a test that is not about the year hierarchy should
+     * not have to build it.
+     */
+    public function forFinancialYear(FinancialYear $year): static
+    {
+        return $this->state(fn () => ['financial_year_id' => $year->getKey()]);
     }
 
     /**
@@ -67,7 +81,10 @@ class AccountingPeriodFactory extends Factory
 
     public function closed(): static
     {
-        return $this->state(fn () => ['status' => PeriodStatus::Closed->value]);
+        return $this->state(fn () => [
+            'status' => PeriodStatus::Closed->value,
+            'closed_at' => now(),
+        ]);
     }
 
     public function open(): static

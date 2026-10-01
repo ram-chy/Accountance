@@ -14,6 +14,12 @@ use Illuminate\Validation\Rule;
  * A closed period is refused here AND in AccountingPeriodService. The request
  * check produces the field-level error a user sees; the service check is the one
  * that actually holds for every caller.
+ *
+ * Phase 8 adds no financial_year_id to this request. A period's year is derived
+ * from the configured fiscal calendar when it does not have one, so exposing the
+ * column would invite a client to move a period into a year its dates do not fall
+ * in - a change the service would then refuse with a message the client could not
+ * have predicted. Changing a period's year is a job for moving its dates.
  */
 class UpdatePeriodRequest extends FormRequest
 {

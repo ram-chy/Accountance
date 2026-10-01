@@ -39,17 +39,24 @@ class JournalPostingService
      * so the validations cannot be invalidated by a concurrent writer between
      * the check and the write.
      *
+     * $dateField is the request field a period rejection should be reported against.
+     * A manual journal posts itself, so the default is right for it. A flow that
+     * generates the journal from a document - an invoice, a bill, a receipt, a
+     * payment, a cash/bank transaction - passes its own date field, so the user is
+     * told the problem is with the invoice_date they submitted rather than with a
+     * journal_date their form does not have.
+     *
      * @throws ValidationException
      * @throws ConflictException when the journal is already posted
      */
-    public function post(Journal $journal, User $actor): Journal
+    public function post(Journal $journal, User $actor, string $dateField = 'journal_date'): Journal
     {
         /*
          * posted_by is taken from the authenticated user object, never from the
          * request payload. The spec is explicit, and the reason is that an audit
          * trail recording whoever the client said posted the entry is worthless.
          */
-        return DB::transaction(function () use ($journal, $actor) {
+        return DB::transaction(function () use ($journal, $actor, $dateField) {
             /*
              * 1. Re-read the journal under an exclusive row lock.
              *
@@ -127,7 +134,8 @@ class JournalPostingService
             // 7. Period: the accounting date must land in an open period.
             $this->periods->assertPostableDate(
                 $fresh->company,
-                Carbon::parse($fresh->journal_date)
+                Carbon::parse($fresh->journal_date),
+                $dateField,
             );
 
             /*

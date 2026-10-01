@@ -3,6 +3,7 @@
 namespace App\Http\Requests\Accounting;
 
 use App\Enums\AccountType;
+use App\Enums\CashBankKind;
 use App\Enums\NormalBalance;
 use App\Models\Account;
 use App\Models\Company;
@@ -59,6 +60,16 @@ class StoreAccountRequest extends FormRequest
             'account_type' => ['required', 'string', Rule::in(AccountType::values())],
 
             /*
+             * Phase 7. Nullable, and null is the ordinary case: most accounts in
+             * a chart of accounts are not cash or bank. When supplied it must be
+             * CASH or BANK, which is the same enum-only rule account_type gets -
+             * storing an arbitrary string here would let an account claim to be a
+             * kind nothing in the application understands, and every cash/bank
+             * eligibility check would then have to treat it as unrecognised.
+             */
+            'cash_bank_kind' => ['nullable', 'string', Rule::in(CashBankKind::values())],
+
+            /*
              * Nullable because null means "follow the account type". When it IS
              * supplied it must be a real side - storing an arbitrary string here
              * would let an account claim to be normal on a side that does not
@@ -89,6 +100,7 @@ class StoreAccountRequest extends FormRequest
         return [
             'code.regex' => 'The account code may contain letters, numbers, dots, dashes and spaces only.',
             'account_type.in' => 'The account type must be one of ASSET, LIABILITY, EQUITY, REVENUE or EXPENSE.',
+            'cash_bank_kind.in' => 'The cash/bank classification must be CASH or BANK, or left empty.',
             'normal_balance.in' => 'The normal balance must be DEBIT or CREDIT, or left empty.',
             'parent_id.exists' => 'The selected parent account does not exist in the active company.',
         ];

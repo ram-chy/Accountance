@@ -33,6 +33,7 @@ return [
         'accounting.periods.create',
         'accounting.periods.update',
         'accounting.periods.close',
+        'accounting.periods.reopen',
 
         'accounting.ledger.view',
 
@@ -67,6 +68,13 @@ return [
         'supplier.payments.delete',
 
         'accounting.reports.view',
+
+        // Phase 7
+        'accounting.cash_bank.view',
+        'accounting.cash_bank.create',
+        'accounting.cash_bank.update',
+        'accounting.cash_bank.post',
+        'accounting.cash_bank.delete',
     ],
 
     'roles' => [
@@ -118,8 +126,24 @@ return [
             'supplier.payments.post',
             'supplier.payments.delete',
             'accounting.reports.view',
+            'accounting.cash_bank.view',
+            'accounting.cash_bank.create',
+            'accounting.cash_bank.update',
+            'accounting.cash_bank.post',
+            'accounting.cash_bank.delete',
         ],
 
+        /*
+        | Manager stays read-only, exactly as it is for every other accounting
+        | module. It holds no .create/.post/.update permission anywhere in this
+        | matrix, and Cash & Banking does not become the first exception.
+        |
+        | The Phase 7 brief's role table shows Manager with create and post
+        | rights; that conflicts with how this project already defines the role,
+        | and the brief itself defers to the existing model ("Role expectations
+        | should follow the existing accounting role model"). The existing model
+        | wins. Recorded as a deliberate deviation in PHASE_7_REPORT.md.
+        */
         'Manager' => [
             'users.view',
             'companies.view',
@@ -137,6 +161,7 @@ return [
             'customer.receipts.view',
             'supplier.payments.view',
             'accounting.reports.view',
+            'accounting.cash_bank.view',
         ],
 
         'Staff' => [

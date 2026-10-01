@@ -3,10 +3,12 @@
 namespace App\Services\Accounting;
 
 use App\Enums\AccountType;
+use App\Enums\CashBankKind;
 use App\Enums\NormalBalance;
 use App\Models\Account;
 use App\Models\Company;
 use Illuminate\Database\QueryException;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
 /**
@@ -20,7 +22,16 @@ use Illuminate\Validation\ValidationException;
  */
 class AccountService
 {
-    public function __construct(private readonly AccountingRules $rules) {}
+    public function __construct(
+        private readonly AccountingRules $rules,
+        /*
+         * Phase 7. Injected only so that a cash/bank reclassification coming
+         * through this generic update path goes through the same checks as one
+         * coming through the cash/bank endpoint. There is no cycle:
+         * CashBankAccountService does not depend on AccountService.
+         */
+        private readonly CashBank\CashBankAccountService $cashBank,
+    ) {}
 
     /**
      * @throws ValidationException
@@ -33,6 +44,7 @@ class AccountService
             'code' => $data['code'],
             'name' => $data['name'],
             'account_type' => $data['account_type'],
+            'cash_bank_kind' => $data['cash_bank_kind'] ?? null,
             'normal_balance' => $data['normal_balance'] ?? null,
             'description' => $data['description'] ?? null,
             'parent_id' => $data['parent_id'] ?? null,
@@ -63,39 +75,74 @@ class AccountService
             excluding: $account
         );
 
-        $account->fill(array_filter([
-            'code' => $data['code'] ?? null,
-            'name' => $data['name'] ?? null,
-            'description' => $data['description'] ?? null,
-        ], fn ($value) => $value !== null));
+        /*
+         * Phase 7 made this the first method in the service that can perform more
+         * than one write: a cash_bank_kind change goes through CashBankAccountService,
+         * which saves, before the account is saved again below. Transactional so
+         * that a duplicate code or name rejected by the final save cannot leave
+         * the reclassification committed on its own.
+         */
+        return DB::transaction(function () use ($account, $data) {
+            $account->fill(array_filter([
+                'code' => $data['code'] ?? null,
+                'name' => $data['name'] ?? null,
+                'description' => $data['description'] ?? null,
+            ], fn ($value) => $value !== null));
 
-        // account_type, normal_balance and parent are handled explicitly:
-        // changing any of them can invalidate an existing hierarchy or flip the
-        // meaning of posted history, so each gets its own validation rather than
-        // being folded into the generic fill.
-        if (array_key_exists('account_type', $data)) {
-            $account->account_type = $data['account_type'];
-        }
+            // account_type, normal_balance and parent are handled explicitly:
+            // changing any of them can invalidate an existing hierarchy or flip the
+            // meaning of posted history, so each gets its own validation rather than
+            // being folded into the generic fill.
+            if (array_key_exists('account_type', $data)) {
+                $account->account_type = $data['account_type'];
+            }
 
-        if (array_key_exists('normal_balance', $data)) {
-            $account->normal_balance = $data['normal_balance'];
-        }
+            if (array_key_exists('normal_balance', $data)) {
+                $account->normal_balance = $data['normal_balance'];
+            }
 
-        if (array_key_exists('parent_id', $data)) {
-            $account->parent_id = $data['parent_id'];
-        }
+            /*
+             * Phase 7. Treated like account_type and normal_balance rather than
+             * being folded into the generic fill, because a reclassification is a
+             * statement about what the account *is* and carries rules the generic
+             * fill has no way to express: an account with bank details cannot
+             * become cash, and an account with accounting history keeps its kind.
+             *
+             * Those rules live in CashBankAccountService, and this delegates to it
+             * rather than restating them. That is the whole reason this is not
+             * simply another `if (array_key_exists(...))` assignment - an
+             * assignment here would let PUT /api/accounts/{account} do something
+             * the cash/bank endpoint refuses, and the two paths would then
+             * disagree about the same account.
+             */
+            if (array_key_exists('cash_bank_kind', $data)) {
+                $requested = $data['cash_bank_kind'] === null
+                    ? null
+                    : CashBankKind::from($data['cash_bank_kind']);
 
-        // Lets the duplicate-key handler tell "you changed nothing" apart from
-        // "you collided with another account".
-        $data['_account_id'] = $account->getKey();
+                if ($requested !== $account->cash_bank_kind) {
+                    $account = $requested === null
+                        ? $this->cashBank->clear($account->company, $account)
+                        : $this->cashBank->markAs($account->company, $account, $requested);
+                }
+            }
 
-        try {
-            $account->save();
-        } catch (QueryException $e) {
-            $this->throwIfDuplicate($e, $account->company, $data);
-        }
+            if (array_key_exists('parent_id', $data)) {
+                $account->parent_id = $data['parent_id'];
+            }
 
-        return $account->refresh();
+            // Lets the duplicate-key handler tell "you changed nothing" apart from
+            // "you collided with another account".
+            $data['_account_id'] = $account->getKey();
+
+            try {
+                $account->save();
+            } catch (QueryException $e) {
+                $this->throwIfDuplicate($e, $account->company, $data);
+            }
+
+            return $account->refresh();
+        });
     }
 
     public function activate(Account $account): Account

@@ -22,6 +22,17 @@ class AccountResource extends JsonResource
             'name' => $this->name,
             'account_type' => $this->account_type->value,
             /*
+             * Phase 7. null for an ordinary account, CASH or BANK otherwise.
+             *
+             * Exposed on the account resource rather than only through the
+             * cash/bank endpoints because a client building a transfer form has
+             * to know which accounts are eligible before it can render the field
+             * at all, and the only honest way to know is for the server to say
+             * which ones it will accept.
+             */
+            'cash_bank_kind' => $this->cash_bank_kind?->value,
+            'is_cash_bank_account' => $this->isCashBankAccount(),
+            /*
              * The effective normal balance, not just the raw override. A client
              * rendering an account row needs to know which side the balance sits
              * on, and that is a property of account_type plus the contra

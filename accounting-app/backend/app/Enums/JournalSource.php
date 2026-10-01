@@ -20,6 +20,9 @@ namespace App\Enums;
  * produce exactly one of them. Each case has a real producer, which is the bar
  * Phase 4 set deliberately.
  *
+ * Phase 7 follows the same bar: CashBankTransaction is declared because
+ * CashBankPostingService produces it, once per cash/bank transaction.
+ *
  * The values name the *document*, not the direction of money: a customer
  * receipt and a supplier payment are both cash movements but are different
  * documents with different source rows, and collapsing them would make
@@ -37,6 +40,21 @@ enum JournalSource: string
     case PurchaseBill = 'PURCHASE_BILL';
     case CustomerReceipt = 'CUSTOMER_RECEIPT';
     case SupplierPayment = 'SUPPLIER_PAYMENT';
+
+    /*
+     * Phase 7 is that phase for cash and bank.
+     *
+     * One case rather than three, because there is one operational table
+     * (cash_bank_transactions) and the direction lives in that table's
+     * transaction_type column. Adding Deposit, Withdrawal and Transfer as three
+     * cases would make source_id ambiguous - three sources against one id
+     * column, with no way to tell which produced a given journal.
+     *
+     * This is consistent with the rule stated above: the value names the
+     * document, and a deposit, a withdrawal and a transfer are three shapes of
+     * one document.
+     */
+    case CashBankTransaction = 'CASH_BANK_TRANSACTION';
 
     /**
      * @return array<int, string>
