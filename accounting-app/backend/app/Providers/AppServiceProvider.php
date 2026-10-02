@@ -4,6 +4,7 @@ namespace App\Providers;
 
 use App\Models\Account;
 use App\Models\AccountingPeriod;
+use App\Models\BankReconciliation;
 use App\Models\CashBankTransaction;
 use App\Models\Company;
 use App\Models\Customer;
@@ -17,6 +18,7 @@ use App\Models\SupplierPayment;
 use App\Models\User;
 use App\Policies\AccountingPeriodPolicy;
 use App\Policies\AccountPolicy;
+use App\Policies\BankReconciliationPolicy;
 use App\Policies\CashBankTransactionPolicy;
 use App\Policies\CompanyPolicy;
 use App\Policies\CustomerPolicy;
@@ -101,6 +103,7 @@ class AppServiceProvider extends ServiceProvider
          | handled by the scoped `account` route binding below.
          */
         Gate::policy(CashBankTransaction::class, CashBankTransactionPolicy::class);
+        Gate::policy(BankReconciliation::class, BankReconciliationPolicy::class);
 
         /*
          | Accounting route binding.
@@ -170,6 +173,8 @@ class AppServiceProvider extends ServiceProvider
         // controller or service re-asserts it and a cross-company id 404s before
         // the controller runs.
         $scoped('transaction', CashBankTransaction::class);
+        $scoped('reconciliation', BankReconciliation::class);
+        $scoped('item', BankReconciliationItem::class);
     }
 
     /**

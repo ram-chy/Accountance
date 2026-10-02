@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\Api\Accounting\AccountController;
 use App\Http\Controllers\Api\Accounting\AccountingPeriodController;
+use App\Http\Controllers\Api\Accounting\BankReconciliationController;
 use App\Http\Controllers\Api\Accounting\CashBankAccountController;
 use App\Http\Controllers\Api\Accounting\CashBankTransactionController;
 use App\Http\Controllers\Api\Accounting\FinancialYearController;
@@ -518,3 +519,27 @@ Route::middleware(['auth:api', 'auth.fresh', 'company.context', 'throttle:api'])
                 ->name('cash-bank.transactions.post');
         });
     });
+
+Route::prefix('bank-reconciliations')->group(function () {
+    Route::get('/', [BankReconciliationController::class, 'index'])
+        ->name('bank-reconciliations.index');
+    Route::post('/', [BankReconciliationController::class, 'store'])
+        ->name('bank-reconciliations.store');
+    Route::get('/{reconciliation}', [BankReconciliationController::class, 'show'])
+        ->name('bank-reconciliations.show');
+    Route::put('/{reconciliation}', [BankReconciliationController::class, 'update'])
+        ->name('bank-reconciliations.update');
+    Route::delete('/{reconciliation}', [BankReconciliationController::class, 'destroy'])
+        ->name('bank-reconciliations.destroy');
+
+    Route::get('/{reconciliation}/movements', [BankReconciliationController::class, 'movements'])
+        ->name('bank-reconciliations.movements');
+    Route::post('/{reconciliation}/items', [BankReconciliationController::class, 'addItem'])
+        ->name('bank-reconciliations.items.store');
+    Route::delete('/{reconciliation}/items/{item}', [BankReconciliationController::class, 'removeItem'])
+        ->name('bank-reconciliations.items.destroy');
+    Route::post('/{reconciliation}/complete', [BankReconciliationController::class, 'complete'])
+        ->name('bank-reconciliations.complete');
+    Route::post('/{reconciliation}/reopen', [BankReconciliationController::class, 'reopen'])
+        ->name('bank-reconciliations.reopen');
+});

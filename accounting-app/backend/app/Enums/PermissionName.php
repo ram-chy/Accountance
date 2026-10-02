@@ -152,6 +152,21 @@ enum PermissionName: string
     case CashBankPost = 'accounting.cash_bank.post';
     case CashBankDelete = 'accounting.cash_bank.delete';
 
+    /*
+    | Phase 9 - Bank Reconciliation.
+    |
+    | These match the brief's recommended permission set. `complete` is a
+    | separate grant from `update` because asserting that the statement and the
+    | ledger agree is an accounting control decision, and reopening that decision
+    | is separated again so a role that may complete does not automatically
+    | gain the ability to undo a completion.
+    */
+    case BankReconciliationView = 'accounting.bank_reconciliation.view';
+    case BankReconciliationCreate = 'accounting.bank_reconciliation.create';
+    case BankReconciliationUpdate = 'accounting.bank_reconciliation.update';
+    case BankReconciliationComplete = 'accounting.bank_reconciliation.complete';
+    case BankReconciliationReopen = 'accounting.bank_reconciliation.reopen';
+
     /**
      * @return array<int, string>
      */

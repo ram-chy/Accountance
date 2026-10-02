@@ -75,6 +75,13 @@ return [
         'accounting.cash_bank.update',
         'accounting.cash_bank.post',
         'accounting.cash_bank.delete',
+
+        // Phase 9
+        'accounting.bank_reconciliation.view',
+        'accounting.bank_reconciliation.create',
+        'accounting.bank_reconciliation.update',
+        'accounting.bank_reconciliation.complete',
+        'accounting.bank_reconciliation.reopen',
     ],
 
     'roles' => [
@@ -131,6 +138,11 @@ return [
             'accounting.cash_bank.update',
             'accounting.cash_bank.post',
             'accounting.cash_bank.delete',
+            'accounting.bank_reconciliation.view',
+            'accounting.bank_reconciliation.create',
+            'accounting.bank_reconciliation.update',
+            'accounting.bank_reconciliation.complete',
+            'accounting.bank_reconciliation.reopen',
         ],
 
         /*
@@ -162,6 +174,10 @@ return [
             'supplier.payments.view',
             'accounting.reports.view',
             'accounting.cash_bank.view',
+            'accounting.bank_reconciliation.view',
+            'accounting.bank_reconciliation.create',
+            'accounting.bank_reconciliation.update',
+            'accounting.bank_reconciliation.complete',
         ],
 
         'Staff' => [
