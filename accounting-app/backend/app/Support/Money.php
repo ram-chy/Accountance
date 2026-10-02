@@ -273,6 +273,83 @@ final readonly class Money implements Stringable
         ));
     }
 
+    /**
+     * The tax already contained within this gross amount, for a rate expressed
+     * as a percentage.
+     *
+     * This is not percentageOf() with the argument order swapped, and the
+     * difference is the divisor. 20% of a net 199.90 is 39.98, so a gross of
+     * 239.88 contains 39.98 - which is 239.88 x 20 / 120, not 239.88 x 20 / 100.
+     * Dividing by 100 would return 47.9760 and a net of 191.9040, a number that
+     * looks entirely reasonable and is wrong.
+     *
+     * Phase 10 needs this for a tax-inclusive quote: the caller knows what the
+     * customer will pay and must extract the tax already inside that figure.
+     * Without this method the extraction would have to happen somewhere outside
+     * Money, in float, or as `gross - gross / (1 + r/100)` - the last of which
+     * is the same arithmetic with a subtraction that can lose the final digit to
+     * the truncation bcdiv performs before roundHalfUp ever sees the value.
+     *
+     * Working scale and rounding are deliberately identical to percentageOf():
+     * two operands at `scale` multiplied give scale x 2 places, dividing at that
+     * scale leaves an error far below the last stored place, and the single
+     * half-up rounding decides the result. Doing it any differently here would
+     * mean an inclusive and an exclusive tax on the same sale could differ in
+     * the last decimal for reasons that have nothing to do with the tax.
+     *
+     * The rate is validated by the caller, not here. A rate at or above 100
+     * would make the divisor zero or negative and has no meaning, but Money does
+     * not know what a "rate" is - percentageOf() accepts the same range for the
+     * same reason - and TaxCalculationService rejects it with a message that
+     * names the field.
+     */
+    public function inclusivePercentageOf(self $rate): self
+    {
+        $workingScale = self::scale() * 2;
+
+        $denominator = bcadd('100', $rate->amount, $workingScale);
+
+        $value = bcdiv(
+            bcmul($this->amount, $rate->amount, $workingScale),
+            $denominator,
+            $workingScale
+        );
+
+        return new self(self::canonicalise(
+            self::roundHalfUp($value, self::scale())
+        ));
+    }
+
+    /**
+     * Divide this amount by a divisor, rounding half-up to the stored scale.
+     *
+     * Exists because every caller that needs a quotient needs one that is
+     * rounded exactly once at the stored scale, and bcdiv's own scale argument
+     * is not that - it truncates. A caller asking for more working digits and
+     * rounding afterwards gets what roundHalfUp() documents; a caller asking for
+     * the stored scale directly gets a silently truncated figure.
+     *
+     * A zero divisor is rejected rather than allowed to raise bcmath's own
+     * division error, which would surface as a 500 from code that had a perfectly
+     * ordinary arithmetic mistake to make.
+     *
+     * @throws InvalidArgumentException when $divisor is zero
+     */
+    public function dividedBy(self $divisor): self
+    {
+        $workingScale = self::scale() * 2;
+
+        if (bccomp($divisor->amount, '0', self::scale()) === 0) {
+            throw new InvalidArgumentException('Cannot divide a monetary amount by zero.');
+        }
+
+        $value = bcdiv($this->amount, $divisor->amount, $workingScale);
+
+        return new self(self::canonicalise(
+            self::roundHalfUp($value, self::scale())
+        ));
+    }
+
     public function negate(): self
     {
         return new self(self::canonicalise(bcsub('0', $this->amount, self::scale())));

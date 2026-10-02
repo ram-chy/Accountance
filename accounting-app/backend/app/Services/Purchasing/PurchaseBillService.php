@@ -12,6 +12,7 @@ use App\Models\User;
 use App\Services\Accounting\AccountingPeriodService;
 use App\Services\Accounting\DocumentCalculator;
 use App\Services\Accounting\DocumentNumberSequence;
+use App\Services\Accounting\DocumentTaxContext;
 use App\Services\Accounting\TransactionAccountResolver;
 use App\Support\Money;
 use Illuminate\Support\Carbon;
@@ -144,7 +145,18 @@ class PurchaseBillService
      */
     private function writeLines(Company $company, PurchaseBill $bill, array $lines): void
     {
-        $totals = $this->calculator->calculateDocument($lines, 'unit_cost');
+        /*
+         * A purchase context, so a line naming configured taxes is charged the
+         * INPUT tax in force on the bill's own date. `output: false` is what
+         * keeps an OUTPUT tax off a purchase - see TaxRuleResolver.
+         */
+        $taxContext = new DocumentTaxContext(
+            company: $company,
+            date: $bill->bill_date->toDateString(),
+            output: false,
+        );
+
+        $totals = $this->calculator->calculateDocument($lines, 'unit_cost', $taxContext);
 
         $this->calculator->assertTaxAccountPresent(
             Money::of($totals['tax_total']),
@@ -173,6 +185,8 @@ class PurchaseBillService
                 'discount' => $calculated['discount'],
                 'tax_rate' => $calculated['tax_rate'],
                 'tax_amount' => $calculated['tax_amount'],
+                // See SalesInvoiceService::writeLines for why this is nullable.
+                'tax_id' => $calculated['tax_id'],
                 'line_total' => $calculated['line_total'],
                 'expense_account_id' => $expenseAccounts[$index]->getKey(),
             ]);

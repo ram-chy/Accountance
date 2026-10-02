@@ -62,6 +62,14 @@ class StorePurchaseBillRequest extends FormRequest
             'lines.*.unit_cost' => $this->decimalAmountRule(),
             'lines.*.discount' => $this->nonNegativeMoneyRule(),
             'lines.*.tax_rate' => $this->nonNegativeMoneyRule(),
+
+            /*
+             * Phase 10. See the matching note in StoreSalesInvoiceRequest: ids are
+             * resolved company-scoped by TaxRuleResolver rather than checked here,
+             * and they take precedence over a tax_rate sent on the same line.
+             */
+            'lines.*.tax_ids' => ['sometimes', 'array'],
+            'lines.*.tax_ids.*' => ['integer'],
             'lines.*.expense_account_id' => $this->companyAccountRule(),
         ];
     }

@@ -12,6 +12,7 @@ use App\Models\User;
 use App\Services\Accounting\AccountingPeriodService;
 use App\Services\Accounting\DocumentCalculator;
 use App\Services\Accounting\DocumentNumberSequence;
+use App\Services\Accounting\DocumentTaxContext;
 use App\Services\Accounting\TransactionAccountResolver;
 use App\Support\Money;
 use Illuminate\Support\Carbon;
@@ -186,7 +187,19 @@ class SalesInvoiceService
      */
     private function writeLines(Company $company, SalesInvoice $invoice, array $lines): void
     {
-        $totals = $this->calculator->calculateDocument($lines, 'unit_price');
+        /*
+         * A sales context, so a line naming configured taxes is charged the rate
+         * in force on the invoice's own date. The date is the invoice's, not
+         * today's: a backdated invoice must be priced on the rate that applied
+         * when it was dated.
+         */
+        $taxContext = new DocumentTaxContext(
+            company: $company,
+            date: $invoice->invoice_date->toDateString(),
+            output: true,
+        );
+
+        $totals = $this->calculator->calculateDocument($lines, 'unit_price', $taxContext);
 
         $this->calculator->assertTaxAccountPresent(
             Money::of($totals['tax_total']),
@@ -215,6 +228,12 @@ class SalesInvoiceService
                 'discount' => $calculated['discount'],
                 'tax_rate' => $calculated['tax_rate'],
                 'tax_amount' => $calculated['tax_amount'],
+                /*
+                 * The configured tax this line was charged with, snapshotted. Null
+                 * for a line carrying only a hand-entered rate, and for a line
+                 * carrying several taxes - see DocumentCalculator::taxOn.
+                 */
+                'tax_id' => $calculated['tax_id'],
                 'line_total' => $calculated['line_total'],
                 'revenue_account_id' => $revenueAccounts[$index]->getKey(),
             ]);

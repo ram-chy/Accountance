@@ -9,6 +9,8 @@ use App\Http\Controllers\Api\Accounting\FinancialYearController;
 use App\Http\Controllers\Api\Accounting\JournalController;
 use App\Http\Controllers\Api\Accounting\LedgerController;
 use App\Http\Controllers\Api\Accounting\ReportController;
+use App\Http\Controllers\Api\Accounting\TaxController;
+use App\Http\Controllers\Api\Accounting\TaxReportController;
 use App\Http\Controllers\Api\AuthenticatedSessionController;
 use App\Http\Controllers\Api\CompanyContextController;
 use App\Http\Controllers\Api\CompanyController;
@@ -520,26 +522,124 @@ Route::middleware(['auth:api', 'auth.fresh', 'company.context', 'throttle:api'])
         });
     });
 
-Route::prefix('bank-reconciliations')->group(function () {
-    Route::get('/', [BankReconciliationController::class, 'index'])
-        ->name('bank-reconciliations.index');
-    Route::post('/', [BankReconciliationController::class, 'store'])
-        ->name('bank-reconciliations.store');
-    Route::get('/{reconciliation}', [BankReconciliationController::class, 'show'])
-        ->name('bank-reconciliations.show');
-    Route::put('/{reconciliation}', [BankReconciliationController::class, 'update'])
-        ->name('bank-reconciliations.update');
-    Route::delete('/{reconciliation}', [BankReconciliationController::class, 'destroy'])
-        ->name('bank-reconciliations.destroy');
+/*
+| Bank reconciliation (Phase 9).
+|
+| Same middleware stack as every other company-scoped module above:
+| `auth:api` establishes the caller, `auth.fresh` re-checks the account and
+| token version, `company.context` resolves and authorises the active company,
+| and `throttle:api` bounds the surface. The policy and the FormRequest checks
+| below still run - this group is what makes the identity those checks are made
+| *against* exist at all, and what stops an unauthenticated request from reaching
+| a controller that would then have no user to fail on.
+|
+| `reconciliation` and `item` are bound to the active company in
+| AppServiceProvider, so an id from another tenant 404s before any method runs.
+*/
+Route::middleware(['auth:api', 'auth.fresh', 'company.context', 'throttle:api'])
+    ->prefix('bank-reconciliations')
+    ->group(function () {
+        Route::get('/', [BankReconciliationController::class, 'index'])
+            ->name('bank-reconciliations.index');
+        Route::post('/', [BankReconciliationController::class, 'store'])
+            ->name('bank-reconciliations.store');
+        Route::get('/{reconciliation}', [BankReconciliationController::class, 'show'])
+            ->name('bank-reconciliations.show');
+        Route::put('/{reconciliation}', [BankReconciliationController::class, 'update'])
+            ->name('bank-reconciliations.update');
+        Route::delete('/{reconciliation}', [BankReconciliationController::class, 'destroy'])
+            ->name('bank-reconciliations.destroy');
 
-    Route::get('/{reconciliation}/movements', [BankReconciliationController::class, 'movements'])
-        ->name('bank-reconciliations.movements');
-    Route::post('/{reconciliation}/items', [BankReconciliationController::class, 'addItem'])
-        ->name('bank-reconciliations.items.store');
-    Route::delete('/{reconciliation}/items/{item}', [BankReconciliationController::class, 'removeItem'])
-        ->name('bank-reconciliations.items.destroy');
-    Route::post('/{reconciliation}/complete', [BankReconciliationController::class, 'complete'])
-        ->name('bank-reconciliations.complete');
-    Route::post('/{reconciliation}/reopen', [BankReconciliationController::class, 'reopen'])
-        ->name('bank-reconciliations.reopen');
-});
+        Route::get('/{reconciliation}/movements', [BankReconciliationController::class, 'movements'])
+            ->name('bank-reconciliations.movements');
+        Route::post('/{reconciliation}/items', [BankReconciliationController::class, 'addItem'])
+            ->name('bank-reconciliations.items.store');
+        Route::delete('/{reconciliation}/items/{item}', [BankReconciliationController::class, 'removeItem'])
+            ->name('bank-reconciliations.items.destroy');
+        Route::post('/{reconciliation}/complete', [BankReconciliationController::class, 'complete'])
+            ->name('bank-reconciliations.complete');
+        Route::post('/{reconciliation}/reopen', [BankReconciliationController::class, 'reopen'])
+            ->name('bank-reconciliations.reopen');
+    });
+
+/*
+|--------------------------------------------------------------------------
+| Taxes (Phase 10)
+|--------------------------------------------------------------------------
+|
+| Tax configuration, the rate history of each tax, where its money posts, and
+| one non-writing calculation endpoint.
+|
+| Same middleware stack as every other company-scoped module above, and the same
+| tenant guarantee: `tax` and `rate` are bound to the active company in
+| AppServiceProvider, so an id from another tenant 404s before any method runs.
+| The company itself is never accepted as a field on any of these requests.
+|
+| `tax/calculate` is singular while the configuration routes are plural, because
+| it is not a resource - it has no id, no persistence and no lifecycle, and giving
+| it a plural path would imply one. It writes nothing: the brief is explicit that
+| calling it must not persist anything, and the controller calls only
+| TaxCalculationService, which has no database write on its path at all.
+*/
+Route::middleware(['auth:api', 'auth.fresh', 'company.context', 'throttle:api'])
+    ->prefix('accounting')
+    ->group(function () {
+        Route::prefix('taxes')->group(function () {
+            Route::get('/', [TaxController::class, 'index'])->name('accounting.taxes.index');
+            Route::post('/', [TaxController::class, 'store'])->name('accounting.taxes.store');
+            Route::get('/{tax}', [TaxController::class, 'show'])->name('accounting.taxes.show');
+            Route::put('/{tax}', [TaxController::class, 'update'])->name('accounting.taxes.update');
+            Route::delete('/{tax}', [TaxController::class, 'destroy'])->name('accounting.taxes.destroy');
+
+            /*
+            | Lifecycle, following the accounts and companies precedent. POST
+            | because these are acts, not a state to be PUT wholesale: a
+            | deactivation is an audited decision with its own authorization, and
+            | the brief asks for it precisely where deletion would be unsafe.
+            */
+            Route::post('/{tax}/activate', [TaxController::class, 'activate'])
+                ->name('accounting.taxes.activate');
+            Route::post('/{tax}/deactivate', [TaxController::class, 'deactivate'])
+                ->name('accounting.taxes.deactivate');
+
+            Route::get('/{tax}/rates', [TaxController::class, 'rates'])->name('accounting.taxes.rates.index');
+            Route::post('/{tax}/rates', [TaxController::class, 'storeRate'])->name('accounting.taxes.rates.store');
+            Route::put('/{tax}/rates/{rate}', [TaxController::class, 'updateRate'])->name('accounting.taxes.rates.update');
+            Route::delete('/{tax}/rates/{rate}', [TaxController::class, 'destroyRate'])->name('accounting.taxes.rates.destroy');
+
+            Route::post('/{tax}/rates/{rate}/activate', [TaxController::class, 'activateRate'])
+                ->name('accounting.taxes.rates.activate');
+            Route::post('/{tax}/rates/{rate}/deactivate', [TaxController::class, 'deactivateRate'])
+                ->name('accounting.taxes.rates.deactivate');
+
+            Route::get('/{tax}/account-mapping', [TaxController::class, 'accountMapping'])
+                ->name('accounting.taxes.account-mapping.show');
+            Route::put('/{tax}/account-mapping', [TaxController::class, 'updateAccountMapping'])
+                ->name('accounting.taxes.account-mapping.update');
+        });
+
+        /*
+        | A calculation, not a write. POST because the amount, the taxes and the
+        | date are all inputs that determine the answer, and there is no resource
+        | with an identity to address afterwards - but nothing about it mutates
+        | state, which is why it lives under the accounting prefix with the
+        | configuration rather than with the reports.
+        */
+        Route::post('/tax/calculate', [TaxController::class, 'calculate'])
+            ->name('accounting.tax.calculate');
+
+        /*
+        | Two read-only reports on posted documents' own tax snapshots. They sit
+        | under the tax prefix rather than Phase 6's `reports` group because their
+        | authorization differs: `accounting.tax.report.view`, not
+        | `accounting.reports.view`. See TaxReportController for why that is not
+        | folded together.
+        */
+        Route::prefix('tax-reports')->group(function () {
+            Route::get('/summary', [TaxReportController::class, 'summary'])
+                ->name('accounting.tax-reports.summary');
+
+            Route::get('/by-tax', [TaxReportController::class, 'byTax'])
+                ->name('accounting.tax-reports.by-tax');
+        });
+    });

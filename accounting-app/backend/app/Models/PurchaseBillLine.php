@@ -20,6 +20,14 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
     'tax_amount',
     'line_total',
     'expense_account_id',
+    /*
+     * Phase 10. The configured tax this line was calculated with, if any.
+     *
+     * Fillable because PurchaseBillService writes it explicitly from the resolved
+     * tax, never from the request body - the field is here for the same reason
+     * tax_rate is. See the matching note on SalesInvoiceLine.
+     */
+    'tax_id',
 ])]
 class PurchaseBillLine extends Model
 {

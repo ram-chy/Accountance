@@ -167,6 +167,39 @@ enum PermissionName: string
     case BankReconciliationComplete = 'accounting.bank_reconciliation.complete';
     case BankReconciliationReopen = 'accounting.bank_reconciliation.reopen';
 
+    /*
+    | Phase 10 - Tax Engine.
+    |
+    | Six capabilities matching the brief's recommended set, and the split between
+    | them is the point rather than the names:
+    |
+    |   view / create / update / delete
+    |       Configuration. `delete` is separate from `update` because deletion is
+    |       the one irreversible act here - deactivation is the reversible
+    |       alternative, so a role that can retire a tax need not be able to
+    |       destroy one.
+    |
+    |   calculate
+    |       POST /tax/calculate. Read-only and writes nothing, but it is not
+    |       `view`: quoting a tax to a customer exercises the engine, and a role
+    |       that may read a tax's configuration need not be allowed to compute with
+    |       it. Separately granted so an operator can be given one without the
+    |       other.
+    |
+    |   report.view
+    |       Deliberately NOT folded into `view`. Phase 6 established that report
+    |       access is its own capability, and tax reports aggregate posted tax
+    |       across the whole company rather than one configured tax. A role that
+    |       may open a single tax record should not thereby see every tax
+    |       position the company has.
+    */
+    case TaxView = 'accounting.tax.view';
+    case TaxCreate = 'accounting.tax.create';
+    case TaxUpdate = 'accounting.tax.update';
+    case TaxDelete = 'accounting.tax.delete';
+    case TaxCalculate = 'accounting.tax.calculate';
+    case TaxReportView = 'accounting.tax.report.view';
+
     /**
      * @return array<int, string>
      */

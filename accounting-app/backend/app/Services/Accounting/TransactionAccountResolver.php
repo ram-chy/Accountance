@@ -187,10 +187,10 @@ class TransactionAccountResolver
     /**
      * The article that reads correctly in front of each role label.
      *
-     * Only the vowel-initial labels differ; the default is "a". Written out
-     * rather than derived, because English cannot be resolved by a rule here:
-     * "an input tax account" and "an expense account" are both needed, and no
-     * amount of string inspection on the label is reliable.
+     * Vowel-initial labels only; the default is "a". Kept as a table rather than
+     * derived, because this is a closed vocabulary chosen by this application and
+     * an explicit table cannot be broken by someone adding a label later without
+     * noticing that the article went with it.
      *
      * @var array<string, string>
      */
@@ -198,6 +198,34 @@ class TransactionAccountResolver
         'input_tax_account_id' => 'an',
         'expense_account_id' => 'an',
     ];
+
+    /**
+     * The "an expense account is required" phrase for a role.
+     *
+     * Returned as a whole phrase rather than assembled at the call site because the
+     * two halves have to agree: the template around it supplies no article of its
+     * own, so a caller that wrote "A %s account is required" around an article that
+     * is already in the table produces "A a tax liability account".
+     */
+    private function requiredAccountPhrase(string $role): string
+    {
+        $label = self::ROLE_LABELS[$role];
+
+        return ucfirst((self::ROLE_ARTICLES[$role] ?? 'a').' '.$label.' account');
+    }
+
+    /**
+     * The article for an arbitrary word, used when naming the account's own type.
+     *
+     * Safe here because the vocabulary is closed: the words are AccountType values
+     * and the role labels above, all of which take "a" or "an" by initial letter
+     * with no exceptions ("an asset", "an expense", "an equity", "a liability",
+     * "a receivable", "a revenue").
+     */
+    private function article(string $word): string
+    {
+        return in_array(strtolower($word[0]), ['a', 'e', 'i', 'o', 'u'], true) ? 'an' : 'a';
+    }
 
     /**
      * Resolve and validate an account for a transactional role.
@@ -241,11 +269,12 @@ class TransactionAccountResolver
         if (! in_array($account->account_type, self::ROLES[$role], true)) {
             throw ValidationException::withMessages([
                 $field => sprintf(
-                    'Account [%s %s] is a %s account. A %s account is required for this transaction.',
+                    'Account [%s %s] is %s %s account. %s is required for this transaction.',
                     $account->code,
                     $account->name,
-                    strtolower($account->account_type->value),
-                    (self::ROLE_ARTICLES[$role] ?? 'a').' '.self::ROLE_LABELS[$role]
+                    $this->article($actualType = strtolower($account->account_type->value)),
+                    $actualType,
+                    $this->requiredAccountPhrase($role)
                 ),
             ]);
         }

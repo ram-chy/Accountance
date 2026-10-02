@@ -78,6 +78,24 @@ class StoreSalesInvoiceRequest extends FormRequest
             'lines.*.tax_rate' => $this->nonNegativeMoneyRule(),
 
             /*
+             * Phase 10. A line may name configured taxes instead of a percentage.
+             *
+             * Existence is deliberately not checked with exists(). The ids are
+             * resolved company-scoped by TaxRuleResolver, which reports a
+             * cross-company id as a validation error naming it - the same answer
+             * a client gets for an id that does not exist, so a request cannot be
+             * used to discover another tenant's tax ids. An exists() rule here
+             * would answer only "no such row" without that property.
+             *
+             * A line may send both tax_rate and tax_ids. The ids win: a line that
+             * names a tax must be charged that tax's rate on the document's date,
+             * not a percentage typed alongside it. DocumentCalculator is where
+             * that precedence is applied.
+             */
+            'lines.*.tax_ids' => ['sometimes', 'array'],
+            'lines.*.tax_ids.*' => ['integer'],
+
+            /*
              * Existence is checked here; appropriateness (it must be a REVENUE
              * account, and active) is checked by TransactionAccountResolver,
              * which is also what runs at posting time. Splitting it this way

@@ -15,6 +15,8 @@ use App\Models\PurchaseBill;
 use App\Models\SalesInvoice;
 use App\Models\Supplier;
 use App\Models\SupplierPayment;
+use App\Models\Tax;
+use App\Models\TaxRate;
 use App\Models\User;
 use App\Policies\AccountingPeriodPolicy;
 use App\Policies\AccountPolicy;
@@ -28,6 +30,7 @@ use App\Policies\PurchaseBillPolicy;
 use App\Policies\SalesInvoicePolicy;
 use App\Policies\SupplierPaymentPolicy;
 use App\Policies\SupplierPolicy;
+use App\Policies\TaxPolicy;
 use App\Policies\UserPolicy;
 use App\Services\CompanyContext;
 use Illuminate\Cache\RateLimiting\Limit;
@@ -106,6 +109,23 @@ class AppServiceProvider extends ServiceProvider
         Gate::policy(BankReconciliation::class, BankReconciliationPolicy::class);
 
         /*
+         | Phase 10 policies.
+         |
+         | TaxPolicy is registered against two model classes, not one, because a
+         | policy is resolved per model class: `authorize('updateRate', $rate)` on
+         | a TaxRate looks for TaxRatePolicy, finds nothing, and a missing policy
+         | is *unauthorized* - so registering only Tax would have made every rate
+         | route fail closed. One policy holding both classes' abilities is the
+         | alternative to two near-identical files, and the abilities deliberately
+         | collapse onto the same permissions (see TaxPolicy's docblock).
+         |
+         | TaxAccountMapping is not registered: no route addresses a mapping
+         | directly, every mapping is read and written through its parent tax.
+         */
+        Gate::policy(Tax::class, TaxPolicy::class);
+        Gate::policy(TaxRate::class, TaxPolicy::class);
+
+        /*
          | Accounting route binding.
          |
          | Registered here rather than in each controller so the tenant check
@@ -175,6 +195,14 @@ class AppServiceProvider extends ServiceProvider
         $scoped('transaction', CashBankTransaction::class);
         $scoped('reconciliation', BankReconciliation::class);
         $scoped('item', BankReconciliationItem::class);
+
+        // Phase 10. Both tables carry company_id, so the same property holds: a Tax
+        // or TaxRate resolved here is already known to belong to the active
+        // company. `rate` is additionally checked against its parent tax in the
+        // controller, because being in the same company is not the same as being
+        // the rate of this tax - and the route binding cannot see the relationship.
+        $scoped('tax', Tax::class);
+        $scoped('rate', TaxRate::class);
     }
 
     /**

@@ -51,7 +51,7 @@ class BankReconciliationTest extends TestCase
         $accountant = $this->accountant();
         $company = $this->createCompanyWithUser($accountant);
 
-        $response = $this->actingAs($accountant, 'api')
+        $response = $this->actingAsJwt($accountant)
             ->withCompanyContext($company)
             ->postJson('/api/bank-reconciliations', [
                 'bank_account_id' => 999,
@@ -71,7 +71,7 @@ class BankReconciliationTest extends TestCase
         $company = $this->createCompanyWithUser($accountant);
         [$bankAccount, $bankMeta] = $this->setupBankAccount($company);
 
-        $response = $this->actingAs($accountant, 'api')
+        $response = $this->actingAsJwt($accountant)
             ->withCompanyContext($company)
             ->postJson('/api/bank-reconciliations', [
                 'bank_account_id' => $bankMeta->getKey(),
@@ -93,7 +93,7 @@ class BankReconciliationTest extends TestCase
         $cash = Account::factory()->for($company)->cash()->create(['name' => 'Cash']);
         $bankMeta = BankAccount::factory()->for($company)->forAccount($cash)->create(['is_active' => true]);
 
-        $response = $this->actingAs($accountant, 'api')
+        $response = $this->actingAsJwt($accountant)
             ->withCompanyContext($company)
             ->postJson('/api/bank-reconciliations', [
                 'bank_account_id' => $bankMeta->getKey(),
@@ -113,7 +113,7 @@ class BankReconciliationTest extends TestCase
         $company = $this->createCompanyWithUser($accountant);
         [$bankAccount, $bankMeta] = $this->setupBankAccount($company);
 
-        $response = $this->actingAs($accountant, 'api')
+        $response = $this->actingAsJwt($accountant)
             ->withCompanyContext($company)
             ->postJson('/api/bank-reconciliations', [
                 'bank_account_id' => $bankMeta->getKey(),

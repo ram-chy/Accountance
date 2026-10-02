@@ -104,7 +104,7 @@ class BankReconciliationMovementService
 
     private function loadEligibleLine(BankReconciliation $reconciliation, int $journalLineId): JournalLine
     {
-        $line = JournalLine::query()->with('journal')->where('company_id', $reconciliation->company_id)->whereKey($journalLineId)->where('account_id', $reconciliation->account_id)->whereHas('journal', fn ($q) => $q->where('status', JournalStatus::Posted->value))->whereHas('journal', fn ($q) => $q->whereDate('date', '<=', $reconciliation->to_date->toDateString()))->first();
+        $line = JournalLine::query()->with('journal')->whereKey($journalLineId)->where('account_id', $reconciliation->account_id)->whereHas('journal', fn ($q) => $q->where('company_id', $reconciliation->company_id)->where('status', JournalStatus::Posted->value))->whereHas('journal', fn ($q) => $q->whereDate('journal_date', '<=', $reconciliation->to_date->toDateString()))->first();
         if ($line === null) {
             throw ValidationException::withMessages(['journal_line_id' => 'The selected movement is not eligible for this reconciliation.']);
         }
@@ -123,7 +123,41 @@ class BankReconciliationMovementService
      */
     private function periodMovements(BankReconciliation $reconciliation): Collection
     {
-        return JournalLine::query()->with('journal')->where('company_id', $reconciliation->company_id)->where('account_id', $reconciliation->account_id)->whereHas('journal', fn ($q) => $q->where('status', JournalStatus::Posted->value))->whereHas('journal', fn ($q) => $q->whereDate('date', '>=', $reconciliation->from_date->toDateString()))->whereHas('journal', fn ($q) => $q->whereDate('date', '<=', $reconciliation->to_date->toDateString()))->orderBy('date')->orderBy('id')->get();
+        /*
+         | Company scope and status come through the journal, not the line.
+         |
+         | journal_lines has no company_id of its own - by design, so that
+         | ownership has exactly one definition (journals.company_id) rather than
+         | two that could disagree. Filtering the line table on a column it does
+         | not have is an SQL error, not an empty result, so the predicate has to
+         | go where the data is. This is the same rule LedgerService::postedLinesQuery
+         | applies when it joins the two tables.
+         |
+         | Ordered by the journal's date rather than the line's: a line has no
+         | date column of its own either, and a reconciliation is a statement
+         | about a period, so the period order is the order that matters.
+         |
+         | The ordering is done in PHP because whereHas() compiles to an EXISTS
+         | subquery rather than a join, so there is no journals table in the
+         | FROM clause to sort by. The relation is eager loaded above, so this
+         | reads no extra rows; it only reorders the set that was already
+         | fetched. Journal id is the tie-break, because two lines on the same
+         | day must still come back in a stable order.
+         */
+        return JournalLine::query()
+            ->with('journal')
+            ->where('account_id', $reconciliation->account_id)
+            ->whereHas('journal', fn ($q) => $q
+                ->where('company_id', $reconciliation->company_id)
+                ->where('status', JournalStatus::Posted->value)
+                ->whereDate('journal_date', '>=', $reconciliation->from_date->toDateString())
+                ->whereDate('journal_date', '<=', $reconciliation->to_date->toDateString()))
+            ->get()
+            ->sortBy([
+                fn (JournalLine $line) => $line->journal->journal_date->toDateString(),
+                fn (JournalLine $line) => $line->journal->getKey(),
+            ])
+            ->values();
     }
 
     /**

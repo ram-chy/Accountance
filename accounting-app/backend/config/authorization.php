@@ -82,6 +82,14 @@ return [
         'accounting.bank_reconciliation.update',
         'accounting.bank_reconciliation.complete',
         'accounting.bank_reconciliation.reopen',
+
+        // Phase 10
+        'accounting.tax.view',
+        'accounting.tax.create',
+        'accounting.tax.update',
+        'accounting.tax.delete',
+        'accounting.tax.calculate',
+        'accounting.tax.report.view',
     ],
 
     'roles' => [
@@ -143,6 +151,12 @@ return [
             'accounting.bank_reconciliation.update',
             'accounting.bank_reconciliation.complete',
             'accounting.bank_reconciliation.reopen',
+            'accounting.tax.view',
+            'accounting.tax.create',
+            'accounting.tax.update',
+            'accounting.tax.delete',
+            'accounting.tax.calculate',
+            'accounting.tax.report.view',
         ],
 
         /*
@@ -155,6 +169,16 @@ return [
         | and the brief itself defers to the existing model ("Role expectations
         | should follow the existing accounting role model"). The existing model
         | wins. Recorded as a deliberate deviation in PHASE_7_REPORT.md.
+        |
+        | Phase 10's brief asks for Manager to have "read/report access according to
+        | existing project authorization conventions; configuration write access
+        | should be explicitly justified". Those are the existing conventions, so
+        | Manager gets tax view, calculate and report access and no configuration
+        | write access. Justification for not giving it: changing a tax rate
+        | changes what every future invoice will collect, which is a configuration
+        | decision with the same weight as changing an account's type - and Manager
+        | holds neither. It is a permission that can be granted deliberately later
+        | without any code change.
         */
         'Manager' => [
             'users.view',
@@ -178,8 +202,22 @@ return [
             'accounting.bank_reconciliation.create',
             'accounting.bank_reconciliation.update',
             'accounting.bank_reconciliation.complete',
+            'accounting.tax.view',
+            'accounting.tax.calculate',
+            'accounting.tax.report.view',
         ],
 
+        /*
+        | Staff gains nothing in Phase 10.
+        |
+        | `calculate` was considered for Staff on the basis that quoting a tax to a
+        | customer is part of taking an order. It is not granted, because the
+        | calculation endpoint accepts an amount and returns a figure computed from
+        | company configuration, which means it discloses the company's effective
+        | tax rate - and Staff already cannot read a tax record to learn that.
+        | Granting the capability would hand out the same information through the
+        | calculation path while denying it through the configuration path.
+        */
         'Staff' => [
             'companies.view',
         ],
