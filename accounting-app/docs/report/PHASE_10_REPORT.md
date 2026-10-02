@@ -1,4 +1,4 @@
-# Phase 10 — Tax Engine Report
+# Tax Engine (Phase 10) Implementation Report
 
 Application: Laravel 13 accounting backend (`accounting-app/backend`)
 Phase brief: `prompt/PHASE 10 — TAX ENGINE.md`
