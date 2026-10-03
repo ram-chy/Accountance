@@ -56,6 +56,52 @@ enum JournalSource: string
      */
     case CashBankTransaction = 'CASH_BANK_TRANSACTION';
 
+    /*
+     * Phase 11 is that phase for credit and debit notes.
+     *
+     * ONE case rather than four, on the same reasoning Phase 7 used for cash/bank
+     * transactions: there is one table (credit_debit_notes), one producer
+     * (CreditDebitNotePostingService) and one source_id column. Four cases
+     * (SALES_CREDIT_NOTE, SALES_DEBIT_NOTE, PURCHASE_CREDIT_NOTE,
+     * PURCHASE_DEBIT_NOTE) would all point at credit_debit_notes.id, so nothing
+     * would be gained and a reader would have to consult credit_debit_notes to
+     * learn which of the four produced a given journal - which they can do,
+     * because the note carries note_type on its own row.
+     *
+     * This follows the rule stated at the top of this file: the value names the
+     * document. A credit note and a debit note are two shapes of one document,
+     * exactly as a deposit and a transfer are two shapes of one cash/bank
+     * transaction.
+     */
+    case CreditDebitNote = 'CREDIT_DEBIT_NOTE';
+
+    /*
+     | Phase 12 is that phase for fixed assets.
+     |
+     | THREE cases, not one - and this is the opposite decision to Phase 7 and
+     | Phase 11, for exactly the reason those two made their single-case choice.
+     | They collapsed several entry kinds onto one case because they shared ONE
+     | table, so a single source_id column could not tell them apart without
+     | opening that table. A fixed asset has three operational tables:
+     |
+     |   fixed_assets               - the capitalisation entry
+     |   fixed_asset_depreciations  - one entry per depreciation period
+     |   fixed_asset_disposals      - the disposal entry
+     |
+     | so source_id resolves against three different tables and the enum value is
+     | the only thing that says which. Collapsing them into one FIXED_ASSET case
+     | would make every fixed-asset journal ambiguous the moment it was read
+     | without the asset, which is precisely the situation a source column exists
+     | for.
+     |
+     | Each case still names a document rather than a direction of money, so the
+     | rule at the top of this file holds: a depreciation entry is a document, and
+     | so is a disposal.
+     */
+    case FixedAsset = 'FIXED_ASSET';
+    case FixedAssetDepreciation = 'FIXED_ASSET_DEPRECIATION';
+    case FixedAssetDisposal = 'FIXED_ASSET_DISPOSAL';
+
     /**
      * @return array<int, string>
      */

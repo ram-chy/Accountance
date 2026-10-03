@@ -7,9 +7,12 @@ use App\Models\AccountingPeriod;
 use App\Models\BankReconciliation;
 use App\Models\CashBankTransaction;
 use App\Models\Company;
+use App\Models\CreditDebitNote;
 use App\Models\Customer;
 use App\Models\CustomerReceipt;
 use App\Models\FinancialYear;
+use App\Models\FixedAsset;
+use App\Models\FixedAssetCategory;
 use App\Models\Journal;
 use App\Models\PurchaseBill;
 use App\Models\SalesInvoice;
@@ -23,8 +26,11 @@ use App\Policies\AccountPolicy;
 use App\Policies\BankReconciliationPolicy;
 use App\Policies\CashBankTransactionPolicy;
 use App\Policies\CompanyPolicy;
+use App\Policies\CreditDebitNotePolicy;
 use App\Policies\CustomerPolicy;
 use App\Policies\CustomerReceiptPolicy;
+use App\Policies\FixedAssetCategoryPolicy;
+use App\Policies\FixedAssetPolicy;
 use App\Policies\JournalPolicy;
 use App\Policies\PurchaseBillPolicy;
 use App\Policies\SalesInvoicePolicy;
@@ -126,6 +132,36 @@ class AppServiceProvider extends ServiceProvider
         Gate::policy(TaxRate::class, TaxPolicy::class);
 
         /*
+         | Phase 11 policy.
+         |
+         | One registration for all four note types: they share a table, a model
+         | and therefore a single class, and the four-way distinction lives in
+         | note_type. Registering a policy per type is not possible without four
+         | models, and four models would mean four classes that differ only in a
+         | default.
+         */
+        Gate::policy(CreditDebitNote::class, CreditDebitNotePolicy::class);
+
+        /*
+         | Phase 12 policies.
+         |
+         | Two classes, because the module has two models with genuinely different
+         | abilities. FixedAssetPolicy carries the three irreversible operations -
+         | capitalize, depreciate, dispose - as their own grants, so a role can be
+         | trusted to record an asset without being trusted to put its cost into the
+         | ledger. FixedAssetCategoryPolicy is plain CRUD on master data; its activate
+         | and deactivate endpoints reuse `update`, because they are the same lifecycle
+         | flag changed in opposite directions and a separate grant would be one more
+         | thing to remember for no extra capability.
+         |
+         | Registered explicitly, as every phase since Phase 4 has done: a policy found
+         | by naming convention stops being applied the moment the class is renamed or
+         | moved, and the failure is silent.
+         */
+        Gate::policy(FixedAsset::class, FixedAssetPolicy::class);
+        Gate::policy(FixedAssetCategory::class, FixedAssetCategoryPolicy::class);
+
+        /*
          | Accounting route binding.
          |
          | Registered here rather than in each controller so the tenant check
@@ -203,6 +239,26 @@ class AppServiceProvider extends ServiceProvider
         // the rate of this tax - and the route binding cannot see the relationship.
         $scoped('tax', Tax::class);
         $scoped('rate', TaxRate::class);
+
+        /*
+         | Phase 11. A note reaching a controller is therefore already known to
+         | belong to the active company, and - because the invoice and bill it
+         | adjusts were resolved through their own scoped bindings - so is the
+         | document it adjusts. Neither controller nor service re-asserts either
+         | fact.
+         */
+        $scoped('creditDebitNote', CreditDebitNote::class);
+
+        /*
+         | Phase 12. Both tables carry company_id, so the same property holds: an
+         | asset or category resolved here is already known to belong to the active
+         | company, and no controller or service re-asserts it. The asset's category
+         | is resolved by a different route when it is addressed directly, so the
+         | binding cannot see the relationship - but an asset can only have been
+         | created with a category from its own company in the first place.
+         */
+        $scoped('fixedAsset', FixedAsset::class);
+        $scoped('fixedAssetCategory', FixedAssetCategory::class);
     }
 
     /**

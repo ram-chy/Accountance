@@ -21,6 +21,13 @@ use Illuminate\Support\Collection;
  * balance is payable-positive. Presenting it payable-positive matters - a
  * supplier statement that showed amounts owed as negative would read as though
  * the supplier owed the company.
+ *
+ * Phase 11 notes arrive through CounterpartyStatementReportService::noteEntries,
+ * which needs nothing from this subclass beyond normalDirection() being `credit`:
+ * that is what places a purchase credit note on the DEBIT side - reducing what we
+ * owe - and a purchase debit note on the credit side. It is the mirror image of the
+ * customer statement, and reading isCredit() as the statement direction instead
+ * would double the payable of a bill its supplier had credited.
  */
 class SupplierStatementReportService extends CounterpartyStatementReportService
 {

@@ -3,6 +3,7 @@
 namespace Tests;
 
 use App\Enums\JournalStatus;
+use App\Enums\NoteType;
 use App\Enums\PaymentStatus;
 use App\Enums\PeriodStatus;
 use App\Enums\RoleName;
@@ -10,6 +11,7 @@ use App\Enums\TransactionStatus;
 use App\Models\Account;
 use App\Models\AccountingPeriod;
 use App\Models\Company;
+use App\Models\CreditDebitNote;
 use App\Models\Customer;
 use App\Models\CustomerReceipt;
 use App\Models\Journal;
@@ -624,6 +626,140 @@ abstract class TestCase extends BaseTestCase
             ->assertJsonPath('data.status', PaymentStatus::Posted->value);
 
         return $payment->refresh();
+    }
+
+    /**
+     * Create a draft credit/debit note through the API.
+     *
+     * The default payload is a sales credit note against a posted invoice with one
+     * line mirroring the first invoice line, which is the case every Phase 11 test
+     * that is not specifically about one of the other three types needs. The note's
+     * own totals are computed by the service, so the caller only ever supplies the
+     * lines - never a total - exactly as a client would.
+     *
+     * @param  array<string, mixed>  $overrides
+     */
+    protected function createDraftNote(
+        User $user,
+        Company $company,
+        SalesInvoice $invoice,
+        array $accounts,
+        array $overrides = []
+    ): CreditDebitNote {
+        $sourceLine = $invoice->lines()->firstOrFail();
+
+        $response = $this->actingAsJwt($user)
+            ->withCompanyContext($company)
+            ->postJson('/api/credit-debit-notes', array_merge([
+                'note_type' => NoteType::SalesCreditNote->value,
+                'sales_invoice_id' => $invoice->getKey(),
+                'note_date' => '2027-02-15',
+                'reason' => 'Goods returned by the customer.',
+                'lines' => [
+                    [
+                        'description' => 'Widget returned',
+                        'quantity' => '1',
+                        'unit_price' => '100.00',
+                        'discount' => '0',
+                        'tax_rate' => '0',
+                        'account_id' => $sourceLine->revenue_account_id,
+                        'sales_invoice_line_id' => $sourceLine->getKey(),
+                    ],
+                ],
+            ], $overrides));
+
+        $response->assertSuccessful();
+
+        return CreditDebitNote::findOrFail($response->json('data.id'));
+    }
+
+    /**
+     * Create and post a credit/debit note, returning the posted model.
+     *
+     * `makePeriodFor` is called for the note's own date, because the note's journal
+     * is dated from the note and JournalPostingService refuses a date outside an
+     * open period - a period that the invoice's own helper has not created.
+     *
+     * @param  array<string, mixed>  $overrides
+     */
+    protected function postNote(
+        User $user,
+        Company $company,
+        SalesInvoice $invoice,
+        array $accounts,
+        string $date = '2027-02-15',
+        array $overrides = []
+    ): CreditDebitNote {
+        $this->makePeriodFor($company, $date, 'P '.substr($date, 0, 7).uniqid());
+
+        $note = $this->createDraftNote($user, $company, $invoice, $accounts, array_merge(
+            ['note_date' => $date],
+            $overrides,
+        ));
+
+        $this->actingAsJwt($user)
+            ->withCompanyContext($company)
+            ->postJson("/api/credit-debit-notes/{$note->getKey()}/post")
+            ->assertSuccessful()
+            ->assertJsonPath('data.status', TransactionStatus::Posted->value);
+
+        return $note->refresh();
+    }
+
+    /**
+     * Create and post a purchase-side credit/debit note.
+     *
+     * Separate from postNote() because the two halves of the phase differ in every
+     * field a client actually sends: the type, the source column, the source line
+     * column and the expense account. Folding them into one helper would mean a
+     * boolean argument selecting between payloads that do not resemble each other,
+     * and a test that had to remember which way round the flag went.
+     *
+     * @param  array<string, mixed>  $overrides
+     */
+    protected function postPurchaseNote(
+        User $user,
+        Company $company,
+        PurchaseBill $bill,
+        array $accounts,
+        string $date = '2027-02-15',
+        array $overrides = []
+    ): CreditDebitNote {
+        $this->makePeriodFor($company, $date, 'P '.substr($date, 0, 7).uniqid());
+
+        $sourceLine = $bill->lines()->firstOrFail();
+
+        $response = $this->actingAsJwt($user)
+            ->withCompanyContext($company)
+            ->postJson('/api/credit-debit-notes', array_merge([
+                'note_type' => NoteType::PurchaseCreditNote->value,
+                'purchase_bill_id' => $bill->getKey(),
+                'note_date' => $date,
+                'reason' => 'Supplier refunded part of the bill.',
+                'lines' => [
+                    [
+                        'description' => 'Materials returned',
+                        'quantity' => '1',
+                        'unit_price' => '500.00',
+                        'discount' => '0',
+                        'tax_rate' => '0',
+                        'account_id' => $sourceLine->expense_account_id,
+                        'purchase_bill_line_id' => $sourceLine->getKey(),
+                    ],
+                ],
+            ], $overrides));
+
+        $response->assertSuccessful();
+
+        $note = CreditDebitNote::findOrFail($response->json('data.id'));
+
+        $this->actingAsJwt($user)
+            ->withCompanyContext($company)
+            ->postJson("/api/credit-debit-notes/{$note->getKey()}/post")
+            ->assertSuccessful()
+            ->assertJsonPath('data.status', TransactionStatus::Posted->value);
+
+        return $note->refresh();
     }
 
     /**

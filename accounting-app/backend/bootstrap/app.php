@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Middleware\AssignRequestId;
 use App\Http\Middleware\EnsureTokenIsFresh;
 use App\Http\Middleware\ResolveCompanyContext;
 use App\Support\ApiResponse;
@@ -30,6 +31,14 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {
+        /*
+         | On the global stack, not the api group. The id is useful on every
+         | response - authenticated or not, API or not - and the api group is
+         | not pre-populated in this application, so appending here is the one
+         | registration that cannot be forgotten by a route added later.
+         */
+        $middleware->append(AssignRequestId::class);
+
         $middleware->alias([
             'auth.fresh' => EnsureTokenIsFresh::class,
             'company.context' => ResolveCompanyContext::class,

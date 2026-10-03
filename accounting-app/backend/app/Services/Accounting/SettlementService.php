@@ -2,14 +2,17 @@
 
 namespace App\Services\Accounting;
 
+use App\Enums\NoteType;
 use App\Enums\PaymentStatus;
 use App\Enums\TransactionStatus;
+use App\Models\CreditDebitNote;
 use App\Models\Customer;
 use App\Models\CustomerReceiptAllocation;
 use App\Models\PurchaseBill;
 use App\Models\SalesInvoice;
 use App\Models\Supplier;
 use App\Models\SupplierPaymentAllocation;
+use App\Services\Accounting\Notes\CreditDebitNoteAdjustmentService;
 use App\Support\Money;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
@@ -37,9 +40,50 @@ use Illuminate\Support\Facades\DB;
  * a draft invoice with allocations would report PARTIALLY_PAID while
  * contributing nothing to the ledger, and an outstanding-AR report would then
  * disagree with the ledger by exactly the draft's balance.
+ *
+ * PHASE 11: THE BALANCE IS NET OF POSTED CREDIT AND DEBIT NOTES
+ *
+ * Everything above counted one thing: money received. A credit note is not money -
+ * it is not a receipt and it allocates nothing - but it does reduce what the
+ * counterparty owes, so leaving it out would leave the balance permanently
+ * overstated by the amount credited, with no available way to correct it short of
+ * a journal the application will not create.
+ *
+ * The sign convention is the adjustment service's, not this class's:
+ *
+ *     balance = grand_total - paid - (posted credits - posted debits)
+ *
+ * The adjustment arithmetic lives in CreditDebitNoteAdjustmentService and is
+ * injected rather than reimplemented here, because the same figure is summed in
+ * three other places (both model's withOutstandingBalance scopes, and the note
+ * posting service) and a fourth copy of a sign convention is a fourth chance to
+ * write it backwards.
+ *
+ * WHAT DOES NOT CHANGE: PAYMENT STATUS IS ABOUT MONEY, NOT NOTES
+ *
+ * statusFromFigures keeps its "allocated is zero" test first, so a document that
+ * has been credited but never paid still reports POSTED rather than
+ * PARTIALLY_PAID - there has been no part-payment, and reporting one would be a
+ * false statement about cash received. Everything after that point is decided by
+ * the note-adjusted balance, which is what keeps the pair self-consistent:
+ *
+ *     allocated > 0 and balance == 0  ->  PAID
+ *     allocated > 0 and balance > 0   ->  PARTIALLY_PAID
+ *     allocated == 0                 ->  POSTED
+ *
+ * An invoice paid in full and then credited reports PARTIALLY_PAID with a
+ * balance_due, which is the truthful answer: the customer has paid everything
+ * invoiced and is owed a credit. The alternative - leaving the status at PAID
+ * while balance_due shows money outstanding - would be two keys on the same
+ * object disagreeing about whether the document is settled, and every consumer of
+ * them would have to know which one to believe.
  */
 class SettlementService
 {
+    public function __construct(
+        private readonly CreditDebitNoteAdjustmentService $adjustments,
+    ) {}
+
     /**
      * Total allocated against an invoice, counting posted receipts only.
      *
@@ -86,14 +130,20 @@ class SettlementService
             return Money::zero();
         }
 
-        $allocated = $this->allocatedByInvoiceIds($invoices->pluck('id')->all());
+        $ids = $invoices->pluck('id')->all();
+
+        $allocated = $this->allocatedByInvoiceIds($ids);
+        $netNotes = $this->netNotesByDocumentIds($ids, 'sales_invoice_id');
 
         $total = Money::zero();
 
         foreach ($invoices as $invoice) {
             $total = $total->plus(
-                Money::of($invoice->grand_total)
-                    ->minus($allocated->get($invoice->getKey(), Money::zero()))
+                $this->balance(
+                    Money::of($invoice->grand_total),
+                    $allocated->get($invoice->getKey(), Money::zero()),
+                    $netNotes->get($invoice->getKey(), Money::zero()),
+                )
             );
         }
 
@@ -114,14 +164,20 @@ class SettlementService
             return Money::zero();
         }
 
-        $allocated = $this->allocatedByBillIds($bills->pluck('id')->all());
+        $ids = $bills->pluck('id')->all();
+
+        $allocated = $this->allocatedByBillIds($ids);
+        $netNotes = $this->netNotesByDocumentIds($ids, 'purchase_bill_id');
 
         $total = Money::zero();
 
         foreach ($bills as $bill) {
             $total = $total->plus(
-                Money::of($bill->grand_total)
-                    ->minus($allocated->get($bill->getKey(), Money::zero()))
+                $this->balance(
+                    Money::of($bill->grand_total),
+                    $allocated->get($bill->getKey(), Money::zero()),
+                    $netNotes->get($bill->getKey(), Money::zero()),
+                )
             );
         }
 
@@ -135,9 +191,11 @@ class SettlementService
      */
     public function figuresFor(SalesInvoice $invoice): array
     {
-        $allocated = $this->allocatedToInvoice($invoice->getKey());
-
-        return $this->figures(Money::of($invoice->grand_total), $allocated);
+        return $this->figures(
+            Money::of($invoice->grand_total),
+            $this->allocatedToInvoice($invoice->getKey()),
+            $this->adjustments->netAdjustmentForInvoice($invoice->getKey()),
+        );
     }
 
     /**
@@ -147,9 +205,11 @@ class SettlementService
      */
     public function billFigures(PurchaseBill $bill): array
     {
-        $allocated = $this->allocatedToBill($bill->getKey());
-
-        return $this->figures(Money::of($bill->grand_total), $allocated);
+        return $this->figures(
+            Money::of($bill->grand_total),
+            $this->allocatedToBill($bill->getKey()),
+            $this->adjustments->netAdjustmentForBill($bill->getKey()),
+        );
     }
 
     /**
@@ -171,13 +231,17 @@ class SettlementService
             return;
         }
 
-        $allocations = $this->allocatedByInvoiceIds($documents->pluck('id')->all());
+        $ids = $documents->pluck('id')->all();
+
+        $allocations = $this->allocatedByInvoiceIds($ids);
+        $netNotes = $this->netNotesByDocumentIds($ids, 'sales_invoice_id');
 
         foreach ($documents as $invoice) {
             $invoice->setSettlement(
                 $this->figures(
                     Money::of($invoice->grand_total),
-                    $allocations->get($invoice->getKey(), Money::zero())
+                    $allocations->get($invoice->getKey(), Money::zero()),
+                    $netNotes->get($invoice->getKey(), Money::zero()),
                 )
             );
         }
@@ -196,13 +260,17 @@ class SettlementService
             return;
         }
 
-        $allocations = $this->allocatedByBillIds($documents->pluck('id')->all());
+        $ids = $documents->pluck('id')->all();
+
+        $allocations = $this->allocatedByBillIds($ids);
+        $netNotes = $this->netNotesByDocumentIds($ids, 'purchase_bill_id');
 
         foreach ($documents as $bill) {
             $bill->setSettlement(
                 $this->figures(
                     Money::of($bill->grand_total),
-                    $allocations->get($bill->getKey(), Money::zero())
+                    $allocations->get($bill->getKey(), Money::zero()),
+                    $netNotes->get($bill->getKey(), Money::zero()),
                 )
             );
         }
@@ -226,7 +294,8 @@ class SettlementService
 
         return $this->statusFromFigures(
             Money::of($invoice->grand_total),
-            $this->allocatedToInvoice($invoice->getKey())
+            $this->allocatedToInvoice($invoice->getKey()),
+            $this->adjustments->netAdjustmentForInvoice($invoice->getKey()),
         );
     }
 
@@ -241,7 +310,8 @@ class SettlementService
 
         return $this->statusFromFigures(
             Money::of($bill->grand_total),
-            $this->allocatedToBill($bill->getKey())
+            $this->allocatedToBill($bill->getKey()),
+            $this->adjustments->netAdjustmentForBill($bill->getKey()),
         );
     }
 
@@ -251,10 +321,38 @@ class SettlementService
      * Called with the invoice row locked, after a receipt has been posted
      * against it. The status column is the only place this lands; paid_total and
      * balance_due stay derived.
+     *
+     * A SETTLED DOCUMENT IS NOT UNSETTLED BY A LATER NOTE
+     *
+     * The note posting service calls this too, and the guard below is the reason
+     * that is safe rather than destructive. An invoice marked PAID or
+     * PARTIALLY_PAID has had money posted against it, and a credit note issued
+     * afterwards is a conversation with the customer: they have paid 200.00 and now
+     * are asking for 50.00 back, and the right answer is a refund, not a document
+     * that quietly becomes unpaid and drags the receivables ageing as though the
+     * customer had stopped paying.
+     *
+     * The credit itself is never in doubt - the journal is written, the balance_due
+     * beside this status does fall to 50.00, and the receivables report excludes
+     * the invoice because its balance is no longer positive. What is protected is
+     * only the label, and the label is the one thing in this module that describes
+     * what happened rather than what is currently outstanding. balance_due answers
+     * the second question and is always derived fresh.
+     *
+     * The guard is the status column rather than the allocated amount because a
+     * document that is fully allocated is by definition settled: if something were
+     * to have de-allocated it, the status would have been rewritten already, and
+     * reading the label is reading the committed history rather than re-deriving it.
+     *
+     * @see statusFromFigures for why a never-paid document reports POSTED.
      */
     public function refreshInvoiceStatus(SalesInvoice $invoice): SalesInvoice
     {
         $status = $this->statusForInvoice($invoice);
+
+        if ($invoice->status->isSettled()) {
+            return $invoice;
+        }
 
         if ($invoice->status !== $status) {
             $invoice->forceFill(['status' => $status->value])->save();
@@ -265,10 +363,17 @@ class SettlementService
 
     /**
      * Recompute and store a bill's settlement status.
+     *
+     * Settled bills are protected from being unset by a later note, exactly as
+     * invoices are - see refreshInvoiceStatus, which is the version worth reading.
      */
     public function refreshBillStatus(PurchaseBill $bill): PurchaseBill
     {
         $status = $this->statusForBill($bill);
+
+        if ($bill->status->isSettled()) {
+            return $bill;
+        }
 
         if ($bill->status !== $status) {
             $bill->forceFill(['status' => $status->value])->save();
@@ -278,17 +383,38 @@ class SettlementService
     }
 
     /**
+     * The note-adjusted balance, unclamped.
+     *
+     * Kept separate from figures() so the status rule below can ask whether the
+     * balance is exactly zero - which is what distinguishes PAID from
+     * PARTIALLY_PAID - without having to re-derive it, and so there is one
+     * definition of "what is still owed on this document" rather than two.
+     */
+    private function balance(Money $grandTotal, Money $allocated, Money $netNotes): Money
+    {
+        /*
+         * Subtracting netNotes is the sign convention, not an accident: a credit
+         * note's net contribution is negative (credits - debits), so subtracting a
+         * negative adds the credit back to the invoice. See the class docblock.
+         */
+        return $grandTotal->minus($allocated)->minus($netNotes);
+    }
+
+    /**
      * @return array{paid_total: string, balance_due: string}
      */
-    private function figures(Money $grandTotal, Money $allocated): array
+    private function figures(Money $grandTotal, Money $allocated, Money $netNotes): array
     {
-        $balance = $grandTotal->minus($allocated);
+        $balance = $this->balance($grandTotal, $allocated, $netNotes);
 
         /*
-         * Clamped at zero. Allocation validation prevents an invoice from being
-         * over-allocated, but a report should still degrade to "nothing owing"
-         * rather than print a negative balance, which a UI would render as
-         * "-50.00" next to an amount owed.
+         * Clamped at zero, and the clamp now also covers a credit that exceeds the
+         * outstanding balance. A note cannot make a document worth less than zero -
+         * the adjustment service refuses a credit larger than the document - but a
+         * document PAID IN FULL and then credited lands here at exactly -100, and
+         * the credit is owed back to the counterparty rather than being money they
+         * owe. "Nothing outstanding" is the right report of that, and it matches
+         * what statusFromFigures concludes, so the two keys never disagree.
          */
         if ($balance->isNegative()) {
             $balance = Money::zero();
@@ -301,7 +427,8 @@ class SettlementService
     }
 
     /**
-     * The status any document should be in, given its total and allocations.
+     * The status any document should be in, given its total, allocations and any
+     * posted notes against it.
      *
      * Public so Phase 6's receivables/payables reports can label each outstanding
      * document without a second copy of this rule. The reports already have the
@@ -309,20 +436,54 @@ class SettlementService
      * the status from raw numbers must agree with the stored status that the
      * posting path wrote, and sharing this method is how the two are kept in
      * step.
+     *
+     * $netNotes is required rather than defaulted to zero. It is computed by the
+     * adjustment service at every call site, so there is no real call that has
+     * none - and defaulting it would let a caller that forgets it silently report
+     * a status from pre-Phase-11 arithmetic, which is precisely the kind of
+     * omission that produces a plausible wrong number instead of an error.
      */
-    public function statusFromFigures(Money $grandTotal, Money $allocated): TransactionStatus
-    {
+    public function statusFromFigures(
+        Money $grandTotal,
+        Money $allocated,
+        Money $netNotes,
+    ): TransactionStatus {
         if ($allocated->isZero()) {
             return TransactionStatus::Posted;
         }
 
         /*
-         * Over-allocation is rejected when the allocation is written, so this is
-         * a backstop against data that predates a rule change rather than the
-         * enforcement point. Reporting PAID is the honest reading of "this
-         * document has no outstanding balance".
+         * WHEN NOTHING HAS BEEN ALLOCATED, POSTED - AND THAT IS NOT THE SAME AS
+         * PARTIALLY_PAID
+         *
+         * Before Phase 11 this method returned PAID whenever allocated >= grand
+         * total, which for an invoice with no receipts at all means 0 >= 200. That
+         * was true and useless: it reported every untouched invoice in the company
+         * as fully paid, and the receivables report - which exists precisely to list
+         * invoices with money outstanding - came back empty on a clean dataset.
+         *
+         * An invoice nobody has paid anything towards is POSTED, which is what it
+         * has always been called everywhere else. PAID is reserved for a document
+         * that has actually had money against it.
+         *
+         * A PARTIALLY_PAID status and a fresh credit note reach this method only
+         * from the read paths - statusForInvoice, statusForBill - because the note
+         * posting service never rewrites a settled document's status. See
+         * refreshInvoiceStatus for why it does not, and why a credit note issued
+         * after a receipt is settled is a customer-side question rather than one
+         * this column is allowed to answer.
+         *
+         * Paid when nothing is outstanding, rather than when paid == total. After
+         * Phase 11 those are different tests: a document paid in full and then
+         * credited has paid == total and a positive balance, and calling it PAID
+         * would contradict the balance_due sitting beside it in the same response.
+         *
+         * Over-allocation is still rejected when the allocation is written, so the
+         * negative-balance branch here is a backstop against data that predates a
+         * rule change rather than the enforcement point - and reporting PAID is the
+         * honest reading of a document with nothing outstanding, credit or not.
          */
-        if ($allocated->greaterThan($grandTotal) || $allocated->equals($grandTotal)) {
+        if (! $this->balance($grandTotal, $allocated, $netNotes)->isPositive()) {
             return TransactionStatus::Paid;
         }
 
@@ -361,6 +522,52 @@ class SettlementService
             allocationPaymentColumn: 'supplier_payment_allocations.supplier_payment_id',
             documentIds: $billIds,
         );
+    }
+
+    /**
+     * Net posted note adjustment per source document, in ONE query.
+     *
+     * The list endpoints attach figures to a whole page at a time, so asking the
+     * adjustment service per document would put one query per row back - which is
+     * exactly the cost the attach* methods exist to remove. So the grouped sum is
+     * issued once here.
+     *
+     * It duplicates the sign CASE that CreditDebitNoteAdjustmentService uses, and
+     * that duplication is deliberate and narrow: the alternative was either giving
+     * the adjustment service a batch method it would serve for no other caller, or
+     * reimplementing the sum in this class. One CASE expression in two files, both
+     * of which are about deriving a balance, is a smaller risk than a batch API
+     * invented for one use - and the two are checked against each other by
+     * PhaseCreditDebitNoteSettlementTest, which asserts that a credit note moves
+     * the balance by the same amount whichever path computed it.
+     *
+     * The document column is a parameter rather than an if/else, because the two
+     * worlds differ only in which FK points at the source - there is no other
+     * difference in how a note is summed.
+     *
+     * @param  array<int, int>  $documentIds
+     * @param  'sales_invoice_id'|'purchase_bill_id'  $documentColumn
+     * @return Collection<int, Money>
+     */
+    private function netNotesByDocumentIds(array $documentIds, string $documentColumn): Collection
+    {
+        if ($documentIds === []) {
+            return new Collection;
+        }
+
+        $credits = implode(', ', array_map(
+            fn (string $case) => "'".$case."'",
+            [NoteType::SalesCreditNote->value, NoteType::PurchaseCreditNote->value]
+        ));
+
+        $rows = CreditDebitNote::query()
+            ->whereIn($documentColumn, $documentIds)
+            ->where('status', TransactionStatus::Posted->value)
+            ->groupBy($documentColumn)
+            ->selectRaw("{$documentColumn} as document_id, SUM(CASE WHEN note_type IN ({$credits}) THEN grand_total ELSE -grand_total END) as net")
+            ->pluck('net', 'document_id');
+
+        return $rows->map(fn ($net) => Money::of((string) $net));
     }
 
     /**

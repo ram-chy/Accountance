@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Enums\NoteType;
 use App\Enums\PaymentStatus;
 use App\Enums\TransactionStatus;
 use App\Support\Money;
@@ -12,7 +13,6 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
-use Illuminate\Support\Facades\DB;
 
 #[Fillable([
     'supplier_id',
@@ -84,18 +84,43 @@ class PurchaseBill extends Model
      */
     public function scopeWithOutstandingBalance(Builder $query): Builder
     {
-        $postedAllocations = DB::raw('(
+        $postedAllocations = '(
             SELECT COALESCE(SUM(supplier_payment_allocations.amount), 0)
             FROM supplier_payment_allocations
             INNER JOIN supplier_payments
                 ON supplier_payments.id = supplier_payment_allocations.supplier_payment_id
             WHERE supplier_payment_allocations.purchase_bill_id = purchase_bills.id
-                AND supplier_payments.status = \''.PaymentStatus::Posted->value.'\'
-        )');
+                AND supplier_payments.status = ?
+        )';
 
+        $postedNotes = '(
+            SELECT COALESCE(SUM(
+                CASE WHEN credit_debit_notes.note_type IN (?, ?)
+                    THEN credit_debit_notes.grand_total
+                    ELSE -credit_debit_notes.grand_total
+                END
+            ), 0)
+            FROM credit_debit_notes
+            WHERE credit_debit_notes.purchase_bill_id = purchase_bills.id
+                AND credit_debit_notes.status = ?
+        )';
+
+        /*
+         * PHASE 11. Identical to SalesInvoice::scopeWithOutstandingBalance, with
+         * the bill's own paid subquery - see that scope for why the note sum is
+         * subtracted rather than added, and why the sign lives in the CASE.
+         */
         return $query
             ->where('status', '!=', TransactionStatus::Draft->value)
-            ->whereColumn('grand_total', '>', $postedAllocations);
+            ->whereRaw(
+                'grand_total - '.$postedAllocations.' - '.$postedNotes.' > 0',
+                [
+                    PaymentStatus::Posted->value,
+                    NoteType::SalesCreditNote->value,
+                    NoteType::PurchaseCreditNote->value,
+                    TransactionStatus::Posted->value,
+                ]
+            );
     }
 
     /*

@@ -4,6 +4,7 @@ namespace App\Services\Accounting\Reports;
 
 use App\Enums\TransactionStatus;
 use App\Models\Company;
+use App\Models\CreditDebitNoteLine;
 use App\Models\PurchaseBillLine;
 use App\Models\SalesInvoiceLine;
 use App\Models\Tax;
@@ -188,6 +189,32 @@ class TaxReportService
             $rows[$key]['output_tax'] = $rows[$key]['output_tax']->plus(Money::of($line->tax_amount));
         }
 
+        /*
+         * PHASE 11. Posted credit and debit notes contribute to the same totals,
+         * with their sign.
+         *
+         * They must, or the report would overstate what the company collected and
+         * recovered: an invoice worth 1000 carrying 20% tax reports 200 of output
+         * tax, and a credit note for 300 of it reverses 60 of both the taxable base
+         * and the tax - so omitting the note would leave the return undeclared and
+         * the amount due to the authority overstated by exactly that 60.
+         *
+* A CREDIT note subtracts from every figure it touches and a DEBIT note
+         * adds. Both live in one loop because the per-line work is otherwise
+         * identical to the invoice loops - the taxable base is line_total less
+         * tax_amount for the same reason it is there - and only the sign, the tax
+         * side and the base row differ. See addNoteLine().
+         *
+         * Nothing here is clamped. A period in which credits exceeded debits
+         * legitimately produces a negative output_tax, and that is the correct
+         * figure - a net refund position. Clamping it to zero would understate the
+         * refund owed, which is the one number in this report that must never be
+         * reported smaller than it is.
+         */
+        foreach ($this->postedNoteLines($company, $from, $to) as $line) {
+            $this->addNoteLine($rows, $line);
+        }
+
         foreach ($this->purchaseLines($company, $from, $to) as $line) {
             $key = $line->tax_id ?? 'unattributed';
 
@@ -238,6 +265,104 @@ class TaxReportService
             ->when($from, fn ($q) => $q->where('purchase_bills.bill_date', '>=', $from->toDateString()))
             ->when($to, fn ($q) => $q->where('purchase_bills.bill_date', '<=', $to->toDateString()))
             ->get();
+    }
+
+    /**
+     * Posted note lines of every type in the window, with their note attached.
+     *
+     * ONE query for all four types. The loops above need the note attached for two
+     * reasons - the tax side and the sign - and both come from the note, so
+     * splitting the query by type would only multiply the queries without changing
+     * what any loop reads.
+     *
+     * The window is the note's own note_date and not the date of the document it
+     * adjusts: a credit note raised in March for a February invoice is a March
+     * transaction for tax purposes, and grouping it into February would restate a
+     * period that has already been reported.
+     *
+     * @return Collection<int, CreditDebitNoteLine>
+     */
+    private function postedNoteLines(Company $company, ?Carbon $from, ?Carbon $to): Collection
+    {
+        return CreditDebitNoteLine::query()
+            ->select('credit_debit_note_lines.*')
+            ->with('note')
+            ->join('credit_debit_notes', 'credit_debit_notes.id', '=', 'credit_debit_note_lines.credit_debit_note_id')
+            ->where('credit_debit_notes.company_id', $company->getKey())
+            ->where('credit_debit_notes.status', TransactionStatus::Posted->value)
+            ->when($from, fn ($q) => $q->where('credit_debit_notes.note_date', '>=', $from->toDateString()))
+            ->when($to, fn ($q) => $q->where('credit_debit_notes.note_date', '<=', $to->toDateString()))
+            ->get();
+    }
+
+    /**
+     * Fold one note line into the aggregate, on the side its note reverses and with
+     * the sign its note implies.
+     *
+     * Three decisions, all read from the note rather than from the line:
+     *
+     *  - WHICH SIDE. A sales note's tax is output tax and a purchase note's is
+     *    input tax, whatever direction the note moves.
+     *  - WHICH SIGN. A credit note subtracts from every figure it touches; a debit
+     *    note adds. A credit note's line and a debit note's line are the same shape,
+     *    so the line alone cannot say which it is.
+     *  - WHICH BASE. line_total less tax_amount, for exactly the same reason as on
+     *    an invoice: the base must be what was actually charged, net of discount.
+     *
+     * The row is passed by reference because this is an accumulator over many lines
+     * and returning a new array per line would mean copying the whole table once
+     * per line - which for a tax period with thousands of note lines is the
+     * difference between one pass and one pass per line.
+     *
+     * @param  array<int|string, array<string, Money|int|null>>  $rows
+     */
+    private function addNoteLine(array &$rows, CreditDebitNoteLine $line): void
+    {
+        $note = $line->note;
+
+        $key = $line->tax_id ?? 'unattributed';
+
+        $rows[$key] ??= $this->emptyRow($line->tax_id);
+
+        $add = ! $note->note_type->isCredit();
+
+        $sales = $note->note_type->isSales();
+
+        $tax = Money::of($line->tax_amount);
+        $taxable = Money::of($line->line_total)->minus($tax);
+
+        /*
+         * Unattributed tax is accumulated separately from the side's own tax
+         * column, as it already is for invoices, so a reader can see how much of a
+         * period's tax carries no configured tax behind it.
+         */
+        if ($line->tax_id === null) {
+            $rows[$key]['unattributed_tax'] = $this->accumulate($rows[$key]['unattributed_tax'], $tax, $add);
+        }
+
+        $rows[$key][$sales ? 'sales_taxable' : 'purchase_taxable'] = $this->accumulate(
+            $rows[$key][$sales ? 'sales_taxable' : 'purchase_taxable'],
+            $taxable,
+            $add
+        );
+
+        $rows[$key][$sales ? 'output_tax' : 'input_tax'] = $this->accumulate(
+            $rows[$key][$sales ? 'output_tax' : 'input_tax'],
+            $tax,
+            $add
+        );
+    }
+
+    /**
+     * Add or subtract one term, exactly.
+     *
+     * A sign is never turned into a negative Money and added - that is how a
+     * rounding error gets introduced into a tax figure - so the two cases are
+     * separate calls on Money rather than a multiplication.
+     */
+    private function accumulate(Money $current, Money $term, bool $add): Money
+    {
+        return $add ? $current->plus($term) : $current->minus($term);
     }
 
     /**

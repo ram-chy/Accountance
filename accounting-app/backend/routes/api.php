@@ -5,7 +5,10 @@ use App\Http\Controllers\Api\Accounting\AccountingPeriodController;
 use App\Http\Controllers\Api\Accounting\BankReconciliationController;
 use App\Http\Controllers\Api\Accounting\CashBankAccountController;
 use App\Http\Controllers\Api\Accounting\CashBankTransactionController;
+use App\Http\Controllers\Api\Accounting\CreditDebitNoteController;
 use App\Http\Controllers\Api\Accounting\FinancialYearController;
+use App\Http\Controllers\Api\Accounting\FixedAssetCategoryController;
+use App\Http\Controllers\Api\Accounting\FixedAssetController;
 use App\Http\Controllers\Api\Accounting\JournalController;
 use App\Http\Controllers\Api\Accounting\LedgerController;
 use App\Http\Controllers\Api\Accounting\ReportController;
@@ -395,6 +398,17 @@ Route::middleware(['auth:api', 'auth.fresh', 'company.context', 'throttle:api'])
             Route::put('/{invoice}', [SalesInvoiceController::class, 'update'])->name('sales.invoices.update');
             Route::delete('/{invoice}', [SalesInvoiceController::class, 'destroy'])->name('sales.invoices.delete');
             Route::post('/{invoice}/post', [SalesInvoiceController::class, 'post'])->name('sales.invoices.post');
+
+            /*
+            | How much of this invoice is still adjustable, per line. Declared
+            | BEFORE any /{creditDebitNote} route would match it, which it cannot
+            | here - different prefix - but placed next to the invoice it describes
+            | because it is a property of the invoice rather than of any note.
+            | See CreditDebitNoteController::adjustableInvoiceLines for why the
+            | permission checked is the invoice's, not a note permission.
+            */
+            Route::get('/{invoice}/adjustable-lines', [CreditDebitNoteController::class, 'adjustableInvoiceLines'])
+                ->name('sales.invoices.adjustable-lines');
         });
 
         /*
@@ -407,6 +421,30 @@ Route::middleware(['auth:api', 'auth.fresh', 'company.context', 'throttle:api'])
             Route::put('/{bill}', [PurchaseBillController::class, 'update'])->name('purchases.bills.update');
             Route::delete('/{bill}', [PurchaseBillController::class, 'destroy'])->name('purchases.bills.delete');
             Route::post('/{bill}/post', [PurchaseBillController::class, 'post'])->name('purchases.bills.post');
+
+            /* The bill-side counterpart of the invoice endpoint above. */
+            Route::get('/{bill}/adjustable-lines', [CreditDebitNoteController::class, 'adjustableBillLines'])
+                ->name('purchases.bills.adjustable-lines');
+        });
+
+        /*
+        | Credit and debit notes. One prefix and one resource for all four types -
+        | the kind of adjustment is the note_type filter on index, not a second set
+        | of endpoints, because there is one table and one lifecycle behind them.
+        |
+        | POST /{creditDebitNote}/post is a separate verb rather than a PATCH for the
+        | same reason it is on an invoice: the two are different capabilities
+        | (`update` edits a draft, `post` makes it permanent), and PUT can never post
+        | because UpdateCreditDebitNoteRequest has no status rule and
+        | CreditDebitNoteService has no post path.
+        */
+        Route::prefix('credit-debit-notes')->group(function () {
+            Route::get('/', [CreditDebitNoteController::class, 'index'])->name('credit_debit_notes.index');
+            Route::post('/', [CreditDebitNoteController::class, 'store'])->name('credit_debit_notes.store');
+            Route::get('/{creditDebitNote}', [CreditDebitNoteController::class, 'show'])->name('credit_debit_notes.show');
+            Route::put('/{creditDebitNote}', [CreditDebitNoteController::class, 'update'])->name('credit_debit_notes.update');
+            Route::delete('/{creditDebitNote}', [CreditDebitNoteController::class, 'destroy'])->name('credit_debit_notes.delete');
+            Route::post('/{creditDebitNote}/post', [CreditDebitNoteController::class, 'post'])->name('credit_debit_notes.post');
         });
 
         /*
@@ -641,5 +679,86 @@ Route::middleware(['auth:api', 'auth.fresh', 'company.context', 'throttle:api'])
 
             Route::get('/by-tax', [TaxReportController::class, 'byTax'])
                 ->name('accounting.tax-reports.by-tax');
+        });
+    });
+
+/*
+|--------------------------------------------------------------------------
+| Fixed assets (Phase 12)
+|--------------------------------------------------------------------------
+|
+| Two resources: categories, which are the templates new assets copy their
+| accounts and useful life from, and the assets themselves. Same middleware
+| stack as every other company-scoped module above, and the same tenant
+| guarantee: `fixedAsset` and `fixedAssetCategory` are bound to the active
+| company in AppServiceProvider, so an id from another tenant 404s before any
+| method runs and no controller re-asserts ownership.
+|
+| THE TWO CREATE ROUTES ARE THE POINT
+|
+| `POST /cash` and `POST /supplier-credit` are separate endpoints rather than one
+| with a method field. The method decides which side of the capitalisation entry
+| may be which, so the eligibility rule ("a cash purchase must credit a cash/bank
+| account") has to be validated against it - and a method carried in the body
+| would mean validating that rule against a value the client chose. This is the
+| same reasoning that gives cash/bank transactions a route per type.
+|
+| The three irreversible operations are POST acts, not state to be PUT:
+| capitalize writes the cost into the ledger, depreciation writes a periodic
+| charge, and dispose removes the cost and books the result. Each has its own
+| permission. `register` and `depreciation-report` are declared BEFORE the
+| `{fixedAsset}` route so the static paths win the match and neither is mistaken
+| for an asset id.
+*/
+Route::middleware(['auth:api', 'auth.fresh', 'company.context', 'throttle:api'])
+    ->prefix('accounting')
+    ->group(function () {
+        Route::prefix('fixed-asset-categories')->group(function () {
+            Route::get('/', [FixedAssetCategoryController::class, 'index'])
+                ->name('accounting.fixed-asset-categories.index');
+            Route::post('/', [FixedAssetCategoryController::class, 'store'])
+                ->name('accounting.fixed-asset-categories.store');
+            Route::get('/{fixedAssetCategory}', [FixedAssetCategoryController::class, 'show'])
+                ->name('accounting.fixed-asset-categories.show');
+            Route::put('/{fixedAssetCategory}', [FixedAssetCategoryController::class, 'update'])
+                ->name('accounting.fixed-asset-categories.update');
+            Route::delete('/{fixedAssetCategory}', [FixedAssetCategoryController::class, 'destroy'])
+                ->name('accounting.fixed-asset-categories.destroy');
+
+            Route::post('/{fixedAssetCategory}/activate', [FixedAssetCategoryController::class, 'activate'])
+                ->name('accounting.fixed-asset-categories.activate');
+            Route::post('/{fixedAssetCategory}/deactivate', [FixedAssetCategoryController::class, 'deactivate'])
+                ->name('accounting.fixed-asset-categories.deactivate');
+        });
+
+        Route::prefix('fixed-assets')->group(function () {
+            // Static paths first, so they are not consumed by `{fixedAsset}`.
+            Route::get('/register', [FixedAssetController::class, 'register'])
+                ->name('accounting.fixed-assets.register');
+            Route::get('/depreciation-report', [FixedAssetController::class, 'depreciationReport'])
+                ->name('accounting.fixed-assets.depreciation-report');
+
+            Route::get('/', [FixedAssetController::class, 'index'])
+                ->name('accounting.fixed-assets.index');
+            Route::post('/cash', [FixedAssetController::class, 'storeCash'])
+                ->name('accounting.fixed-assets.store-cash');
+            Route::post('/supplier-credit', [FixedAssetController::class, 'storeSupplierCredit'])
+                ->name('accounting.fixed-assets.store-supplier-credit');
+
+            Route::get('/{fixedAsset}', [FixedAssetController::class, 'show'])
+                ->name('accounting.fixed-assets.show');
+            Route::put('/{fixedAsset}', [FixedAssetController::class, 'update'])
+                ->name('accounting.fixed-assets.update');
+            Route::delete('/{fixedAsset}', [FixedAssetController::class, 'destroy'])
+                ->name('accounting.fixed-assets.destroy');
+
+            Route::post('/{fixedAsset}/capitalize', [FixedAssetController::class, 'capitalize'])
+                ->name('accounting.fixed-assets.capitalize');
+            Route::get('/{fixedAsset}/depreciation-schedule', [FixedAssetController::class, 'depreciationSchedule'])
+                ->name('accounting.fixed-assets.depreciation-schedule');
+            Route::post('/{fixedAsset}/depreciation', [FixedAssetController::class, 'depreciate'])
+                ->name('accounting.fixed-assets.depreciate');
+            Route::post('/{fixedAsset}/dispose', [FixedAssetController::class, 'dispose'])
+                ->name('accounting.fixed-assets.dispose');
         });
     });

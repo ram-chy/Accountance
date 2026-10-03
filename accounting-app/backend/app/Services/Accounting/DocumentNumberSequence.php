@@ -64,6 +64,29 @@ class DocumentNumberSequence
             DocumentNumberType::Receipt => 'RCPT-',
             DocumentNumberType::Payment => 'PAY-',
             DocumentNumberType::CashBankTransaction => 'CBN-',
+            /*
+             * One counter for all four note types rather than one each. The notes
+             * share a table, a unique constraint on (company_id, note_number) and
+             * a single endpoint, so a shared prefix is what makes a note number
+             * recognisable as a note. Four counters would still be correct - they
+             * are keyed by type - but it would buy nothing: nothing in the
+             * application needs to know whether CDN-000001 was a sales credit or a
+             * purchase debit, and splitting them would only make "the last note
+             * issued" harder to answer. The type column on the note itself already
+             * carries that.
+             */
+            DocumentNumberType::CreditDebitNote => 'CDN-',
+
+            /*
+             * Phase 12. One counter for every fixed asset, prefixed FA-, on the same
+             * reasoning that gives notes one CDN- counter: there is one table, so
+             * one sequence, and "what number was that van" has one answer. The
+             * prefix is not configurable from CompanySetting the way the invoice
+             * prefix is, because an asset number is internal to the register rather
+             * than printed on a document a counterparty sees - which is also why
+             * there is nothing for a company to rename.
+             */
+            DocumentNumberType::FixedAsset => 'FA-',
         };
 
         return $prefix.str_pad((string) $number, 6, '0', STR_PAD_LEFT);

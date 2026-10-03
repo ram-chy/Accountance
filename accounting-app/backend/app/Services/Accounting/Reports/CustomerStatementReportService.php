@@ -20,6 +20,11 @@ use Illuminate\Support\Collection;
  * less), and the running balance is receivable-positive. Drafts of either kind
  * are excluded: a draft has no accounting entry, so including one would put a
  * number on the statement that is not in the ledger.
+ *
+ * Phase 11 notes arrive through CounterpartyStatementReportService::noteEntries,
+ * which needs nothing from this subclass beyond normalDirection() being `debit`:
+ * that is what puts a sales credit note on the credit side and a sales debit note
+ * on the debit side, with the running balance falling and rising accordingly.
  */
 class CustomerStatementReportService extends CounterpartyStatementReportService
 {

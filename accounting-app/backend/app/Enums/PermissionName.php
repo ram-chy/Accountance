@@ -200,6 +200,88 @@ enum PermissionName: string
     case TaxCalculate = 'accounting.tax.calculate';
     case TaxReportView = 'accounting.tax.report.view';
 
+    /*
+    | Phase 11 - Credit & Debit Notes.
+    |
+    | The same five-capability shape Phase 5 gave sales invoices and purchase
+    | bills, and deliberately so: a note is a financial document in exactly the
+    | same sense, with the same lifecycle and the same "posted means permanent"
+    | property. Reusing a different shape here would mean a role that can post an
+    | invoice cannot post a credit note against it, which is not a distinction
+    | anybody makes in practice.
+    |
+    |   view    read notes, and read the adjustable-line figures that tell a user
+    |           what may still be adjusted
+    |   create  raise a new draft note
+    |   update  edit a draft note
+    |   delete  discard a draft note
+    |   post    make the adjustment part of the accounting record
+    |
+    | `post` is separate from `update` for the same reason it is on every other
+    | document: preparing an adjustment and committing it are different acts, and
+    | the second one is irreversible.
+    |
+    | These are NOT riders on sales.invoices.* or purchases.bills.*. A note is a
+    | distinct document with a distinct number, a distinct lifecycle and its own
+    | audit trail, and a role granted invoice rights should have to be granted
+    | note rights deliberately - the grant is the decision.
+    */
+    case CreditDebitNotesView = 'accounting.credit_debit_note.view';
+    case CreditDebitNotesCreate = 'accounting.credit_debit_note.create';
+    case CreditDebitNotesUpdate = 'accounting.credit_debit_note.update';
+    case CreditDebitNotesDelete = 'accounting.credit_debit_note.delete';
+    case CreditDebitNotesPost = 'accounting.credit_debit_note.post';
+
+    /*
+    | Phase 12 - Fixed Assets.
+    |
+    | Seven capabilities. The first four are the ordinary document shape Phase 5
+    | gave invoices and bills, and the last three are the three acts a fixed asset
+    | has that an invoice does not. They are separate grants because they are
+    | separately consequential acts, not because they are three names for one:
+    |
+    |   view         read the asset, its depreciation schedule and the register
+    |   create       record a draft asset. No accounting effect.
+    |   update       edit a draft asset. The service refuses a capitalised asset.
+    |   delete       discard a draft asset. Not a grant to remove a capitalised
+    |                one - the service refuses those outright and there is no
+    |                cancellation mechanism, because the application has none.
+    |   capitalize   put the asset's cost into the ledger and start its life
+    |   depreciate   charge one period's depreciation to the ledger
+    |   dispose      remove the asset's cost from the ledger and book gain or loss
+    |
+    | `capitalize` is separate from `create` for the same reason `post` is on every
+    | other document: creating a draft moves nothing, and a draft asset has no
+    | carrying value. A role that may register that the company owns a van need not
+    | be able to write 30,000 into the asset account.
+    |
+    | `capitalize` and `depreciate` are separate from each other because they are
+    | annual-ish and monthly-recurring acts respectively, and the second happens
+    | roughly a hundred and twenty more times per asset. A role trusted to do the
+    | once is not thereby trusted with the hundred and twenty.
+    |
+    | `dispose` is separate again because it is the only act that *removes* cost
+    | from the ledger and books a gain or a loss against the result - the one
+    | operation in this module whose entry can move profit.
+    |
+    | There is deliberately NO report permission. Phase 6 collapsed eleven report
+    | permissions into one because every report endpoint is a read over the same
+    | accounting truth; Phase 10 added one back only because tax reports aggregate
+    | tax across the whole company rather than one configured tax. The asset
+    | register and the depreciation report are reads over this module's own
+    | records joined to the same posted ledger, and `view` already covers reading
+    | an asset and its schedule, which is the same information in a different
+    | arrangement. Splitting it would add a second grant that has to be remembered
+    | alongside the first for no additional capability.
+    */
+    case FixedAssetsView = 'accounting.fixed_asset.view';
+    case FixedAssetsCreate = 'accounting.fixed_asset.create';
+    case FixedAssetsUpdate = 'accounting.fixed_asset.update';
+    case FixedAssetsDelete = 'accounting.fixed_asset.delete';
+    case FixedAssetsCapitalize = 'accounting.fixed_asset.capitalize';
+    case FixedAssetsDepreciate = 'accounting.fixed_asset.depreciate';
+    case FixedAssetsDispose = 'accounting.fixed_asset.dispose';
+
     /**
      * @return array<int, string>
      */

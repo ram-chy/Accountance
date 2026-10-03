@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Enums\NoteType;
 use App\Enums\PaymentStatus;
 use App\Enums\TransactionStatus;
 use App\Support\Money;
@@ -12,7 +13,6 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
-use Illuminate\Support\Facades\DB;
 
 #[Fillable([
     'customer_id',
@@ -105,23 +105,69 @@ class SalesInvoice extends Model
      * anyone owes, and an outstanding-AR report that included drafts would
      * disagree with the ledger by exactly the draft total.
      *
+     * PHASE 11: POSTED NOTES ENTER THE COMPARISON
+     *
+     * The balance is no longer `grand_total > paid`. A posted credit note reduces
+     * what the customer owes and a posted debit note increases it, so both take
+     * part with their own sign:
+     *
+     *     outstanding = grand_total - paid - (credits - debits)
+     *
+     * Only POSTED notes are summed, for the same reason only POSTED receipts are:
+     * a draft note has no journal and has adjusted nothing.
+     *
+     * The note sum is SUBTRACTED rather than added to the right-hand side, because
+     * the CASE inside it already carries the sign - a credit note's grand_total
+     * arrives there as a negative number, so subtracting the sum credits the
+     * invoice. Writing `grand_total > paid + notes` would be a subtly different
+     * and wrong expression of the same rule, and the sign is exactly the kind of
+     * thing that is easy to get backwards and hard to notice: a wrongly signed
+     * note sum does not produce a 500, it produces plausible numbers.
+     *
      * @param  Builder<SalesInvoice>  $query
      * @return Builder<SalesInvoice>
      */
     public function scopeWithOutstandingBalance(Builder $query): Builder
     {
-        $postedAllocations = DB::raw('(
+        /*
+         * Both subqueries are plain SQL strings rather than DB::raw() fragments,
+         * because two of them have to be combined into one comparison and PHP cannot
+         * concatenate an Expression into a string. The two status values are passed
+         * as bindings rather than interpolated, so no part of this is a value the
+         * database has to be trusted to parse as a literal.
+         */
+        $postedAllocations = '(
             SELECT COALESCE(SUM(customer_receipt_allocations.amount), 0)
             FROM customer_receipt_allocations
             INNER JOIN customer_receipts
                 ON customer_receipts.id = customer_receipt_allocations.customer_receipt_id
             WHERE customer_receipt_allocations.sales_invoice_id = sales_invoices.id
-                AND customer_receipts.status = \''.PaymentStatus::Posted->value.'\'
-        )');
+                AND customer_receipts.status = ?
+        )';
+
+        $postedNotes = '(
+            SELECT COALESCE(SUM(
+                CASE WHEN credit_debit_notes.note_type IN (?, ?)
+                    THEN credit_debit_notes.grand_total
+                    ELSE -credit_debit_notes.grand_total
+                END
+            ), 0)
+            FROM credit_debit_notes
+            WHERE credit_debit_notes.sales_invoice_id = sales_invoices.id
+                AND credit_debit_notes.status = ?
+        )';
 
         return $query
             ->where('status', '!=', TransactionStatus::Draft->value)
-            ->whereColumn('grand_total', '>', $postedAllocations);
+            ->whereRaw(
+                'grand_total - '.$postedAllocations.' - '.$postedNotes.' > 0',
+                [
+                    PaymentStatus::Posted->value,
+                    NoteType::SalesCreditNote->value,
+                    NoteType::PurchaseCreditNote->value,
+                    TransactionStatus::Posted->value,
+                ]
+            );
     }
 
     /*

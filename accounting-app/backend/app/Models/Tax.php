@@ -91,17 +91,42 @@ class Tax extends Model
     }
 
     /**
+     * Note lines calculated with this tax.
+     *
+     * Phase 11. A credit or debit note carries the same tax_id on its lines as the
+     * invoice or bill it adjusts, so this is the third place a tax can end up
+     * referenced. The relation exists as its own method rather than being folded
+     * into salesInvoiceLines() because the line type is genuinely different - a
+     * note line belongs to a note, not to a document - and a caller asking "which
+     * notes used this tax" wants exactly the note lines.
+     *
+     * @return HasMany<CreditDebitNoteLine, $this>
+     */
+    public function creditDebitNoteLines(): HasMany
+    {
+        return $this->hasMany(CreditDebitNoteLine::class);
+    }
+
+    /**
      * Has any document line been calculated with this tax?
      *
-     * The check behind the refuse-to-delete rule in TaxService. Two exists()
-     * queries rather than one union: a union across two differently-parented tables
-     * buys nothing here, because the answer is only ever yes or no and exists()
-     * stops at the first row either way.
+     * The check behind the refuse-to-delete rule in TaxService. Three exists()
+     * queries rather than one union: a union across three differently-parented
+     * tables buys nothing here, because the answer is only ever yes or no and
+     * exists() stops at the first row either way. Short-circuit order is cheapest
+     * first, since invoices and bills are far more common than notes.
+     *
+     * The note check is not optional. A tax used only by a posted credit note has
+     * already been declared to the authority on the note's own report, so deleting
+     * the tax would orphan a figure that is still owed - and the note lines that
+     * snapshotted it would keep a tax_id pointing at nothing, which is precisely
+     * the broken reference the tax report's "unattributed" handling cannot repair.
      */
     public function isReferencedByDocument(): bool
     {
         return $this->salesInvoiceLines()->exists()
-            || $this->purchaseBillLines()->exists();
+            || $this->purchaseBillLines()->exists()
+            || $this->creditDebitNoteLines()->exists();
     }
 
     public function creator(): BelongsTo
