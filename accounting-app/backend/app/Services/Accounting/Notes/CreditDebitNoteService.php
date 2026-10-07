@@ -12,6 +12,7 @@ use App\Models\PurchaseBill;
 use App\Models\SalesInvoice;
 use App\Models\User;
 use App\Services\Accounting\AccountingPeriodService;
+use App\Services\Accounting\Currency\DocumentCurrencyService;
 use App\Services\Accounting\DocumentCalculator;
 use App\Services\Accounting\DocumentNumberSequence;
 use App\Services\Accounting\DocumentTaxContext;
@@ -79,6 +80,7 @@ class CreditDebitNoteService
         private readonly DocumentCalculator $calculator,
         private readonly TransactionAccountResolver $accounts,
         private readonly CreditDebitNoteAdjustmentService $adjustments,
+        private readonly DocumentCurrencyService $currencies,
     ) {}
 
     /**
@@ -128,6 +130,13 @@ class CreditDebitNoteService
              * and the counterparty copied from THAT document rather than taken from
              * the request. The last one is why a note can never be raised against
              * someone else's invoice: there is no request field for it.
+             *
+             * currency_id joins them for the same reason. A note against a USD
+             * invoice IS in USD - it is not an independent document that happens to
+             * adjust one - so letting a client denominate it in something else
+             * would leave the USD receivable credited by a base-currency document
+             * and split one customer balance across two currencies. There is no
+             * request field for it either.
              */
             $note->forceFill([
                 'company_id' => $company->getKey(),
@@ -137,8 +146,11 @@ class CreditDebitNoteService
                 'purchase_bill_id' => $source instanceof PurchaseBill ? $source->getKey() : null,
                 'customer_id' => $source instanceof SalesInvoice ? $source->customer_id : null,
                 'supplier_id' => $source instanceof PurchaseBill ? $source->supplier_id : null,
+                'currency_id' => $source->currency_id,
                 'created_by' => $actor->getKey(),
             ])->save();
+
+            $this->applyCurrency($company, $note);
 
             $totals = $this->writeLines($company, $note, $data['lines'] ?? []);
 
@@ -146,6 +158,40 @@ class CreditDebitNoteService
 
             return $note->refresh();
         });
+    }
+
+    /**
+     * Snapshot the rate of the note's own date, in the currency it inherited from
+     * its source.
+     *
+     * The rate is the note's OWN date's rate, not the source's, and that is not a
+     * detail. A USD invoice dated at 2.5 and credited two weeks later at 2.75 is
+     * 100.00 USD of relief worth 275.00 of base against 250.00 originally booked.
+     * The 25.00 gap is realized exchange, and it belongs where the brief puts
+     * realized FX - on settlement - rather than being buried in the note's rate.
+     * Pricing the note at the source's rate instead would make the note balance
+     * and quietly destroy the difference before settlement could see it.
+     *
+     * This snapshot is a preview so the draft can be read in both currencies while
+     * it is edited; CreditDebitNotePostingService re-resolves it at posting, since
+     * the rate table is mutable history and a draft is not an accounting fact.
+     *
+     * Mutates the model and does not save, so create lands the inherited currency
+     * and its rate in one write.
+     *
+     * @throws ValidationException
+     */
+    private function applyCurrency(Company $company, CreditDebitNote $note): void
+    {
+        $context = $this->currencies->resolve(
+            $company,
+            $note->currency_id,
+            (string) $note->note_date,
+            'currency_id',
+        );
+
+        $note->currency_id = $context->currency?->getKey();
+        $note->exchange_rate = $context->rateToPersist();
     }
 
     /**
@@ -192,6 +238,17 @@ class CreditDebitNoteService
                 if (array_key_exists($field, $data)) {
                     $fresh->{$field} = $data[$field];
                 }
+            }
+
+            /*
+             * Only a re-date moves the rate. The currency is not editable here -
+             * it is derived from the source document and updateDraft has no rule
+             * for changing the source - so re-running the lookup unconditionally
+             * would only risk refusing an unrelated line edit because a rate row
+             * was deactivated since the draft was written.
+             */
+            if (array_key_exists('note_date', $data)) {
+                $this->applyCurrency($company, $fresh);
             }
 
             $fresh->save();

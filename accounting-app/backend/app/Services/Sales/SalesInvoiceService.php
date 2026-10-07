@@ -10,6 +10,7 @@ use App\Models\Customer;
 use App\Models\SalesInvoice;
 use App\Models\User;
 use App\Services\Accounting\AccountingPeriodService;
+use App\Services\Accounting\Currency\DocumentCurrencyService;
 use App\Services\Accounting\DocumentCalculator;
 use App\Services\Accounting\DocumentNumberSequence;
 use App\Services\Accounting\DocumentTaxContext;
@@ -41,6 +42,7 @@ class SalesInvoiceService
         private readonly DocumentCalculator $calculator,
         private readonly TransactionAccountResolver $accounts,
         private readonly CustomerService $customers,
+        private readonly DocumentCurrencyService $currencies,
     ) {}
 
     /**
@@ -66,6 +68,8 @@ class SalesInvoiceService
                 'notes' => $data['notes'] ?? null,
                 'tax_account_id' => $data['tax_account_id'] ?? null,
             ]);
+
+            $this->applyCurrency($company, $invoice, $data);
 
             /*
              * forceFill for the four server-owned columns: company_id from the
@@ -135,6 +139,15 @@ class SalesInvoiceService
                 $fresh->tax_account_id = $data['tax_account_id'];
             }
 
+            /*
+             * Re-dating and re-denominating together are resolved as one step, and
+             * the rate is taken at the date the invoice will carry once this save
+             * lands. Resolving them separately would let a draft be re-dated without
+             * being re-priced, leaving a rate that belonged to a date the invoice no
+             * longer has.
+             */
+            $this->applyCurrency($company, $fresh, $data);
+
             $fresh->save();
 
             if (array_key_exists('lines', $data)) {
@@ -171,6 +184,62 @@ class SalesInvoiceService
 
             $fresh->delete();
         });
+    }
+
+    /**
+     * Resolve the invoice's transaction currency and snapshot the rate of its date.
+     *
+     * WHY A DRAFT CARRIES A RATE AT ALL
+     *
+     * Because a draft invoice's amounts are in its transaction currency, and an
+     * amount in EUR beside a base-currency ledger is not a number anybody can act
+     * on. The snapshot exists so the document can be read - shown, approved,
+     * printed - in both currencies from the moment it is saved, and so a reviewer
+     * sees the rate the invoice was priced at rather than the rate of the day they
+     * happen to look at it.
+     *
+     * WHY POSTING RE-RESOLVES IT ANYWAY
+     *
+     * Because this snapshot is a preview, and the rate table is mutable history. A
+     * rate row may be added, corrected or deactivated between drafting and posting,
+     * and a draft is not an accounting fact - there is nothing to preserve about the
+     * rate it was typed with. So SalesInvoicePostingService resolves the rate again
+     * at posting time, writes that one to the header, to the lines and to the
+     * journal together, and the number stops moving for good.
+     *
+     * WHY ONLY WHEN THE CURRENCY OR THE DATE CHANGES
+     *
+     * An edit that touches neither cannot change what the rate should be, and
+     * re-resolving on every line edit would mean a merchant who deactivated one
+     * rate row could no longer fix a typo in a description. The gate is on the two
+     * inputs that can change the answer, not on how many times the form is saved.
+     *
+     * The method mutates the model and does not save; the caller decides when, so
+     * that re-dating and re-denominating land in a single write.
+     *
+     * @param  array<string, mixed>  $data
+     *
+     * @throws ValidationException
+     */
+    private function applyCurrency(Company $company, SalesInvoice $invoice, array $data): void
+    {
+        if (! array_key_exists('currency_id', $data) && ! array_key_exists('invoice_date', $data)) {
+            return;
+        }
+
+        $currencyId = array_key_exists('currency_id', $data)
+            ? $data['currency_id']
+            : $invoice->currency_id;
+
+        $context = $this->currencies->resolve(
+            $company,
+            $currencyId,
+            (string) $invoice->invoice_date,
+            'currency_id',
+        );
+
+        $invoice->currency_id = $context->currency?->getKey();
+        $invoice->exchange_rate = $context->rateToPersist();
     }
 
     /**

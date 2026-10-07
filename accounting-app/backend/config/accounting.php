@@ -30,6 +30,45 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Exchange Rate Precision
+    |--------------------------------------------------------------------------
+    |
+    | A SEPARATE scale from the one above, and the reason is not tidiness - it is
+    | that four decimal places is the wrong answer for a rate by a wide margin.
+    |
+    | An exchange rate here is always "units of the company's base currency per one
+    | unit of the transaction currency", and the pairs where that number is small
+    | are ordinary rather than exotic:
+    |
+    |     IDR -> USD   about 0.000062   stored at 4 places as 0.0001   (61% error)
+    |     KRW -> USD   about 0.00072    stored at 4 places as 0.0007   (3% error)
+    |     INR -> USD   about 0.0120     stored at 4 places as 0.0120   (rounding only)
+    |
+    | The first of those is the reason this key exists. A rate that is 61% wrong is
+    | not a rounding artefact to be noticed at year end - it is a plausible-looking
+    | number that misstates every foreign-currency document converted with it, and
+    | the error scales with the amount rather than staying small.
+    |
+    | Ten places keeps the multiplication exact at the ledger's scale: a
+    | four-decimal amount times a ten-decimal rate has fourteen decimal places, and
+    | rounding that once at the end - which is what Money::product() does, and what
+    | the journal_lines CHECK constraint verifies independently - lands on a value
+    | that is correct rather than merely close.
+    |
+    | `scale` must match the DECIMAL(20,10) columns built by the Phase 14
+    | migrations. App\Support\Rate reads this value, so the schema and the value
+    | object cannot drift apart: widening the columns without widening this would
+    | round silently, and narrowing it would reject valid rates.
+    |
+    */
+
+    'exchange_rate' => [
+        'total' => 20,
+        'scale' => 10,
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Journal Numbering
     |--------------------------------------------------------------------------
     |

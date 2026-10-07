@@ -54,6 +54,7 @@ class BalanceSheetReportService extends JournalReportService
 
         return [
             'period' => ['from' => $from?->toDateString(), 'to' => $asOf->toDateString()],
+            'base_currency' => $this->baseCurrency($company),
             'assets' => [
                 'total' => $this->amount($assets['total']),
                 'accounts' => $assets['rows'],

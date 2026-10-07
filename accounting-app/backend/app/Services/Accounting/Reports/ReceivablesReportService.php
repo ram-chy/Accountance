@@ -45,7 +45,7 @@ class ReceivablesReportService
         $invoices = SalesInvoice::query()
             ->where('company_id', $company->getKey())
             ->withOutstandingBalance()
-            ->with('customer')
+            ->with(['customer', 'currency'])
             ->when($customerId, fn ($query) => $query->where('customer_id', $customerId))
             ->whereDate('invoice_date', '<=', $asOf->toDateString())
             ->orderBy('due_date')
@@ -68,7 +68,14 @@ class ReceivablesReportService
             $totalPaid = $totalPaid->plus($paid);
             $totalDue = $totalDue->plus($due);
 
-            $rows[] = [
+            /*
+             * Phase 14 §21: the amounts on a row are in the invoice's own currency.
+             * For a foreign invoice that is not the base currency, so the row says
+             * which currency it is and what one unit of it was worth, and the base
+             * grand total (stored at posting, never recomputed) lets the balance be
+             * read alongside the ledger without re-converting it today.
+             */
+            $row = [
                 'invoice_id' => $invoice->getKey(),
                 'invoice_number' => $invoice->invoice_number,
                 'invoice_date' => $invoice->invoice_date?->toDateString(),
@@ -83,10 +90,19 @@ class ReceivablesReportService
                 'balance_due' => $due->toDatabase(),
                 'days_past_due' => $this->daysPastDue($invoice->due_date, $asOf),
             ];
+
+            if ($invoice->isForeignCurrency()) {
+                $row['currency_code'] = $invoice->currency?->code;
+                $row['exchange_rate'] = $invoice->exchange_rate;
+                $row['base_grand_total'] = $invoice->baseGrandTotal()->toDatabase();
+            }
+
+            $rows[] = $row;
         }
 
         return [
             'as_of' => $asOf->toDateString(),
+            'base_currency' => $this->baseCurrency($company),
             'rows' => $rows,
             'count' => count($rows),
             'totals' => [
@@ -94,6 +110,28 @@ class ReceivablesReportService
                 'paid_total' => $totalPaid->toDatabase(),
                 'balance_due' => $totalDue->toDatabase(),
             ],
+        ];
+    }
+
+    /**
+     * The company base currency for the disclosure block (Phase 14 §21.1).
+     *
+     * Outstanding invoices can be raised in different currencies, and a single
+     * "balance_due" total that mixed them would be a number no currency could
+     * settle - so the block says what the report's own currency meter is, and a
+     * foreign row's currency_code is what to compare it against.
+     *
+     * @return array{code: string|null, name: string|null, symbol: string|null, decimals: int|null}
+     */
+    private function baseCurrency(Company $company): array
+    {
+        $currency = $company->currency;
+
+        return [
+            'code' => $currency?->code,
+            'name' => $currency?->name,
+            'symbol' => $currency?->symbol,
+            'decimals' => $currency?->decimal_precision,
         ];
     }
 }

@@ -90,7 +90,7 @@ abstract class CounterpartyStatementReportService
 
             $running = $running->plus($this->signed($entry, $normal));
 
-            $rows[] = [
+            $row = [
                 'date' => $entry['date']->toDateString(),
                 'type' => $entry['type'],
                 'reference' => $entry['reference'],
@@ -99,6 +99,16 @@ abstract class CounterpartyStatementReportService
                 'credit' => $entry['direction'] === 'credit' ? $amount->toDatabase() : '0.0000',
                 'running_balance' => $running->toDatabase(),
             ];
+            if (isset($entry['currency_code'])) {
+                $row['currency_code'] = $entry['currency_code'];
+            }
+            if (array_key_exists('exchange_rate', $entry)) {
+                $row['exchange_rate'] = $entry['exchange_rate'];
+            }
+            if (array_key_exists('foreign_amount', $entry)) {
+                $row['foreign_amount'] = $entry['foreign_amount'];
+            }
+            $rows[] = $row;
         }
 
         /*
@@ -118,6 +128,7 @@ abstract class CounterpartyStatementReportService
                 'from' => $from?->toDateString(),
                 'to' => $to?->toDateString(),
             ],
+            'base_currency' => $this->baseCurrency($company),
             'opening_balance' => $opening->toDatabase(),
             'rows' => $rows,
             'totals' => [
@@ -125,6 +136,29 @@ abstract class CounterpartyStatementReportService
                 'credit' => $totalCredit->toDatabase(),
             ],
             'closing_balance' => $closing->toDatabase(),
+        ];
+    }
+
+    /**
+     * The company base currency for the disclosure block (Phase 14 §21.1).
+     *
+     * Every row's debit/credit/running balance is a base amount; a row that also
+     * carries currency_code is the same amount re-expressed in the currency it
+     * was transacted in, with that row's stored snapshot rate. The block says
+     * which currency the balances are in so the foreign fields can never be
+     * mistaken for the books.
+     *
+     * @return array{code: string|null, name: string|null, symbol: string|null, decimals: int|null}
+     */
+    private function baseCurrency(Company $company): array
+    {
+        $currency = $company->currency;
+
+        return [
+            'code' => $currency?->code,
+            'name' => $currency?->name,
+            'symbol' => $currency?->symbol,
+            'decimals' => $currency?->decimal_precision,
         ];
     }
 
@@ -187,39 +221,20 @@ abstract class CounterpartyStatementReportService
             ->orderBy('note_date')
             ->orderBy('id')
             ->get()
-            ->map(fn (CreditDebitNote $note): array => [
-                'date' => Carbon::parse($note->note_date),
-
-                /*
-                 * The note's own id, not a prefixed one. It has to sort correctly
-                 * against invoices, bills, receipts and payments - all of which
-                 * contribute their own primary key to the ordering - and only the
-                 * raw key is comparable. A note dated the same day as a receipt is
-                 * therefore ordered against it by id, which is arbitrary but stable
-                 * and reproducible; the alternative, a separate sort key, would
-                 * reorder a customer's own history on every statement run.
-                 */
-                'id' => $note->getKey(),
-                'direction' => $note->note_type->isCredit() ? $opposite : $normal,
-                'type' => $note->note_type->isCredit() ? 'credit_note' : 'debit_note',
-
-                /*
-                 * The counterparty's own reference where there is one - the returns
-                 * note number they quoted - and the internal note number otherwise,
-                 * so the column is never blank and the row is always traceable back
-                 * to the document.
-                 */
-                'reference' => $note->reference ?: $note->note_number,
-
-                /*
-                 * The reason, for the same reason invoices show their notes here:
-                 * it is the one part of the entry not derivable from the amount and
-                 * the document it adjusts, so it is what a reader needs in order to
-                 * recognise the row without opening it.
-                 */
-                'description' => $note->reason,
-                'amount' => Money::of($note->grand_total),
-            ]);
+            ->map(function (CreditDebitNote $note) use ($company, $normal, $opposite): array {
+                return [
+                    'date' => Carbon::parse($note->note_date),
+                    'id' => $note->getKey(),
+                    'direction' => $note->note_type->isCredit() ? $opposite : $normal,
+                    'type' => $note->note_type->isCredit() ? 'credit_note' : 'debit_note',
+                    'reference' => $note->reference ?: $note->note_number,
+                    'description' => $note->reason,
+                    'amount' => $note->baseGrandTotal(),
+                    'currency_code' => $note->currency_id ? $note->currency?->code : $company->currency?->code,
+                    'exchange_rate' => $note->exchange_rate,
+                    'foreign_amount' => $note->isForeignCurrency() ? $note->grandTotalAmount()->toDatabase() : null,
+                ];
+            });
     }
 
     /**

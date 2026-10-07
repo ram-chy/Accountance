@@ -282,6 +282,51 @@ enum PermissionName: string
     case FixedAssetsDepreciate = 'accounting.fixed_asset.depreciate';
     case FixedAssetsDispose = 'accounting.fixed_asset.dispose';
 
+    /*
+    | Phase 14 - Multi-currency & Foreign Exchange.
+    |
+    | WHY CURRENCY IS SPLIT FROM EXCHANGE RATE
+    |
+    | A currency is GLOBAL reference data: creating one changes the vocabulary
+    | every tenant may invoice in, so it is the most sensitive write in the
+    | system and is deliberately withheld from the Accountant role. An exchange
+    | rate is per-company and affects only that company's conversions, so the
+    | Accountant who posts journals and settles foreign balances owns it.
+    |
+    | WHY `activate`/`deactivate` ARE THEIR OWN CURRENCY GRANTS
+    |
+    | Deactivation is the reversible alternative to deletion (a currency that a
+    | posted document referenced must stay readable forever), and it removes the
+    | currency from every tenant's pickers at once. That is a bigger act than
+    | editing a name, so it is separated the same way accounts.activate is.
+    |
+    | WHY `accounting.fx.update`
+    |
+    | It configures the realised FX gain/loss account pair a company must set
+    | before it can post a foreign settlement. It is an update to company
+    | accounting configuration rather than company settings, so it does not ride
+    | on `companies.settings.update`; the base currency, which DOES reinterpret
+    | the whole ledger, still does.
+    |
+    | WHY `accounting.controls.view`
+    |
+    | The currency/FX integrity report is read-only and repairs nothing, but it
+    | exposes a company's financial position and configuration gaps, so it is not
+    | folded into the ordinary reporting permission.
+    */
+    case CurrencyView = 'accounting.currency.view';
+    case CurrencyCreate = 'accounting.currency.create';
+    case CurrencyUpdate = 'accounting.currency.update';
+    case CurrencyActivate = 'accounting.currency.activate';
+    case CurrencyDeactivate = 'accounting.currency.deactivate';
+
+    case ExchangeRateView = 'accounting.exchange_rate.view';
+    case ExchangeRateCreate = 'accounting.exchange_rate.create';
+    case ExchangeRateUpdate = 'accounting.exchange_rate.update';
+
+    case FxUpdate = 'accounting.fx.update';
+    case ControlsView = 'accounting.controls.view';
+
     /**
      * @return array<int, string>
      */

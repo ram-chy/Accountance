@@ -8,9 +8,12 @@ use App\Exceptions\ConflictException;
 use App\Models\Account;
 use App\Models\CreditDebitNote;
 use App\Models\CreditDebitNoteLine;
+use App\Models\JournalLine;
 use App\Models\PurchaseBill;
 use App\Models\SalesInvoice;
 use App\Models\User;
+use App\Services\Accounting\Currency\DocumentCurrencyService;
+use App\Services\Accounting\Currency\TransactionCurrency;
 use App\Services\Accounting\JournalPostingService;
 use App\Services\Accounting\JournalService;
 use App\Services\Accounting\SettlementService;
@@ -81,6 +84,7 @@ class CreditDebitNotePostingService
         private readonly TransactionAccountResolver $accounts,
         private readonly CreditDebitNoteAdjustmentService $adjustments,
         private readonly SettlementService $settlement,
+        private readonly DocumentCurrencyService $currencies,
     ) {}
 
     /**
@@ -203,6 +207,20 @@ class CreditDebitNotePostingService
                 ? $source->invoice_number
                 : $source->bill_number;
 
+            /*
+             * The note's currency context, resolved here rather than read off the
+             * draft. See SalesInvoicePostingService for why: the draft's rate is a
+             * preview of a mutable rate table, and this is the last moment the note
+             * can be priced. One resolved rate reaches the header, the document lines
+             * and every journal line.
+             */
+            $transaction = $this->currencies->resolve(
+                $fresh->company,
+                $fresh->currency_id,
+                $fresh->note_date->toDateString(),
+                'currency_id',
+            );
+
             // 9. Create the draft journal, then 10. post it through the single
             //    existing writer. Neither this service nor any controller writes
             //    journals.status or journal_lines.
@@ -247,7 +265,7 @@ class CreditDebitNotePostingService
                      * answer to a question that already has one.
                      */
                     'source_id' => $fresh->getKey(),
-                    'lines' => $this->journalLines($fresh, $counterAccount, $itemByAccount, $taxAccount, $totals),
+                    'lines' => $this->journalLines($transaction, $fresh, $counterAccount, $itemByAccount, $taxAccount, $totals),
                 ],
             );
 
@@ -259,6 +277,23 @@ class CreditDebitNotePostingService
              * reasoning SalesInvoicePostingService uses, and the reason the schema's
              * posted_fields check can be partial without being weak.
              */
+            /*
+             * The note's base figures, read back out of the journal rather than
+             * converted a second time. The counterparty leg carries the whole grand
+             * total on its own, so its base amount IS the note's base grand total;
+             * reading it rather than recomputing it is what keeps the note and its own
+             * entry from ever being able to say different things.
+             */
+            $booked = $journal->lines()->get();
+
+            $baseGrandTotal = $this->currencies->baseAmountBooked($booked, (int) $counterAccount->getKey());
+
+            $baseTaxTotal = $taxAccount === null
+                ? Money::zero()
+                : $this->currencies->baseAmountBooked($booked, (int) $taxAccount->getKey());
+
+            $this->writeBaseTaxAmounts($fresh, $transaction, $booked, $taxAccount);
+
             $fresh->forceFill([
                 'status' => TransactionStatus::Posted->value,
                 'journal_id' => $journal->getKey(),
@@ -268,6 +303,10 @@ class CreditDebitNotePostingService
                 'discount_total' => $totals['discount_total'],
                 'tax_total' => $totals['tax_total'],
                 'grand_total' => $totals['grand_total'],
+                'currency_id' => $transaction->currency?->getKey(),
+                'exchange_rate' => $transaction->rateToPersist(),
+                'base_grand_total' => $baseGrandTotal?->toDatabase(),
+                'base_tax_total' => $baseTaxTotal->toDatabase(),
             ])->save();
 
             /*
@@ -348,6 +387,7 @@ class CreditDebitNotePostingService
      * @return array<int, array<string, mixed>>
      */
     private function journalLines(
+        TransactionCurrency $transaction,
         CreditDebitNote $note,
         Account $counterAccount,
         array $itemByAccount,
@@ -369,34 +409,90 @@ class CreditDebitNotePostingService
 
         $grandTotal = Money::of($totals['grand_total']);
 
-        $lines = [[
-            'account_id' => $counterAccount->getKey(),
-            'description' => $this->counterDescription($note),
-            'debit' => $counterIsDebit ? $grandTotal->toDatabase() : '0',
-            'credit' => $counterIsDebit ? '0' : $grandTotal->toDatabase(),
-        ]];
+        $lines = [$this->currencies->journalLine(
+            $transaction,
+            (int) $counterAccount->getKey(),
+            $this->counterDescription($note),
+            $grandTotal,
+            $counterIsDebit,
+        )];
 
         $itemDescription = $type->isSales() ? 'Sales revenue' : 'Purchased expense';
 
         foreach ($itemByAccount as $accountId => $amount) {
-            $lines[] = [
-                'account_id' => $accountId,
-                'description' => $itemDescription,
-                'debit' => $itemIsDebit ? $amount->toDatabase() : '0',
-                'credit' => $itemIsDebit ? '0' : $amount->toDatabase(),
-            ];
+            $lines[] = $this->currencies->journalLine(
+                $transaction,
+                (int) $accountId,
+                $itemDescription,
+                $amount,
+                $itemIsDebit,
+            );
         }
 
         if ($taxAccount !== null) {
-            $lines[] = [
-                'account_id' => $taxAccount->getKey(),
-                'description' => $type->isSales() ? 'Tax payable' : 'Input tax',
-                'debit' => $itemIsDebit ? $totals['tax_total'] : '0',
-                'credit' => $itemIsDebit ? '0' : $totals['tax_total'],
-            ];
+            $lines[] = $this->currencies->journalLine(
+                $transaction,
+                (int) $taxAccount->getKey(),
+                $type->isSales() ? 'Tax payable' : 'Input tax',
+                Money::of($totals['tax_total']),
+                $itemIsDebit,
+            );
         }
 
         return $lines;
+    }
+
+    /**
+     * Record each note line's tax in base currency, from the posted journal.
+     *
+     * The distribution rule - every line but the last converted at the note's rate,
+     * the last taking the remainder - is the one SalesInvoicePostingService applies,
+     * for the same structural reason: a journal line holds one foreign amount and
+     * one rate, so the tax leg is a single conversion of the note's tax total, and
+     * the per-line figures that must add up to it cannot each be an independent
+     * conversion.
+     *
+     * @param  Collection<int, JournalLine>  $booked
+     */
+    private function writeBaseTaxAmounts(
+        CreditDebitNote $note,
+        TransactionCurrency $transaction,
+        Collection $booked,
+        ?Account $taxAccount
+    ): void {
+        $bookedTax = $taxAccount === null
+            ? null
+            : $this->currencies->baseAmountBooked($booked, (int) $taxAccount->getKey());
+
+        if ($bookedTax === null) {
+            return;
+        }
+
+        $taxable = $note->lines()
+            ->where('tax_amount', '>', 0)
+            ->orderBy('line_number')
+            ->get();
+
+        if ($taxable->isEmpty()) {
+            return;
+        }
+
+        $remaining = $bookedTax;
+        $lastIndex = $taxable->count() - 1;
+
+        foreach ($taxable as $position => $line) {
+            $share = $position === $lastIndex
+                ? $remaining
+                : $this->currencies->toBase(Money::of($line->tax_amount), $transaction);
+
+            if ($share->greaterThan($remaining)) {
+                $share = $remaining;
+            }
+
+            $line->forceFill(['base_tax_amount' => $share->toDatabase()])->save();
+
+            $remaining = $remaining->minus($share);
+        }
     }
 
     /**

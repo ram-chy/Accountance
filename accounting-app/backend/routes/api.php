@@ -1,11 +1,15 @@
 <?php
 
 use App\Http\Controllers\Api\Accounting\AccountController;
+use App\Http\Controllers\Api\Accounting\AccountingControlController;
 use App\Http\Controllers\Api\Accounting\AccountingPeriodController;
 use App\Http\Controllers\Api\Accounting\BankReconciliationController;
 use App\Http\Controllers\Api\Accounting\CashBankAccountController;
 use App\Http\Controllers\Api\Accounting\CashBankTransactionController;
+use App\Http\Controllers\Api\Accounting\CompanyFxSettingController;
 use App\Http\Controllers\Api\Accounting\CreditDebitNoteController;
+use App\Http\Controllers\Api\Accounting\CurrencyController;
+use App\Http\Controllers\Api\Accounting\ExchangeRateController;
 use App\Http\Controllers\Api\Accounting\FinancialYearController;
 use App\Http\Controllers\Api\Accounting\FixedAssetCategoryController;
 use App\Http\Controllers\Api\Accounting\FixedAssetController;
@@ -188,6 +192,14 @@ Route::middleware(['auth:api', 'auth.fresh', 'company.context', 'throttle:api'])
             ->name('company.settings.show');
         Route::put('/settings', [CompanySettingsController::class, 'update'])
             ->name('company.settings.update');
+
+        /*
+        | Base-currency change. A path of its own rather than a settings field,
+        | because the change reinterprets every stored base amount and therefore
+        | carries a safety refusal and its own audit - see CompanyCurrencyService.
+        */
+        Route::put('/settings/base-currency', [CompanySettingsController::class, 'changeBaseCurrency'])
+            ->name('company.settings.base_currency');
     });
 
 /*
@@ -328,6 +340,35 @@ Route::middleware(['auth:api', 'auth.fresh', 'company.context', 'throttle:api'])
                 Route::get('/cash-bank', [ReportController::class, 'cashBank'])
                     ->name('accounting.reports.cash-bank');
             });
+
+            /*
+            | Multi-currency and foreign exchange (Phase 14).
+            |
+            | Currencies are global reference data: creating one is not a
+            | company-scoped act and no route accepts a company id. Exchange
+            | rates and FX settings are company-scoped - rates bind to the active
+            | company in AppServiceProvider, and the settings row is a per-company
+            | singleton resolved from context, so neither takes an id to tamper
+            | with. The control report is read-only and repairs nothing (§24).
+            */
+            Route::get('/currencies', [CurrencyController::class, 'index'])->name('accounting.currencies.index');
+            Route::post('/currencies', [CurrencyController::class, 'store'])->name('accounting.currencies.store');
+            Route::get('/currencies/{currency}', [CurrencyController::class, 'show'])->name('accounting.currencies.show');
+            Route::put('/currencies/{currency}', [CurrencyController::class, 'update'])->name('accounting.currencies.update');
+            Route::post('/currencies/{currency}/activate', [CurrencyController::class, 'activate'])->name('accounting.currencies.activate');
+            Route::post('/currencies/{currency}/deactivate', [CurrencyController::class, 'deactivate'])->name('accounting.currencies.deactivate');
+
+            Route::get('/exchange-rates', [ExchangeRateController::class, 'index'])->name('accounting.exchange-rates.index');
+            Route::post('/exchange-rates', [ExchangeRateController::class, 'store'])->name('accounting.exchange-rates.store');
+            Route::get('/exchange-rates/{exchangeRate}', [ExchangeRateController::class, 'show'])->name('accounting.exchange-rates.show');
+            Route::put('/exchange-rates/{exchangeRate}', [ExchangeRateController::class, 'update'])->name('accounting.exchange-rates.update');
+            Route::post('/exchange-rates/{exchangeRate}/activate', [ExchangeRateController::class, 'activate'])->name('accounting.exchange-rates.activate');
+            Route::post('/exchange-rates/{exchangeRate}/deactivate', [ExchangeRateController::class, 'deactivate'])->name('accounting.exchange-rates.deactivate');
+
+            Route::get('/fx-settings', [CompanyFxSettingController::class, 'show'])->name('accounting.fx-settings.show');
+            Route::put('/fx-settings', [CompanyFxSettingController::class, 'update'])->name('accounting.fx-settings.update');
+
+            Route::get('/controls', [AccountingControlController::class, 'index'])->name('accounting.controls.index');
         });
     });
 

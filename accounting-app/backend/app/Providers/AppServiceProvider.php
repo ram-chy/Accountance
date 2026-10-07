@@ -7,9 +7,12 @@ use App\Models\AccountingPeriod;
 use App\Models\BankReconciliation;
 use App\Models\CashBankTransaction;
 use App\Models\Company;
+use App\Models\CompanyFxSetting;
 use App\Models\CreditDebitNote;
+use App\Models\Currency;
 use App\Models\Customer;
 use App\Models\CustomerReceipt;
+use App\Models\ExchangeRate;
 use App\Models\FinancialYear;
 use App\Models\FixedAsset;
 use App\Models\FixedAssetCategory;
@@ -25,10 +28,13 @@ use App\Policies\AccountingPeriodPolicy;
 use App\Policies\AccountPolicy;
 use App\Policies\BankReconciliationPolicy;
 use App\Policies\CashBankTransactionPolicy;
+use App\Policies\CompanyFxSettingPolicy;
 use App\Policies\CompanyPolicy;
 use App\Policies\CreditDebitNotePolicy;
+use App\Policies\CurrencyPolicy;
 use App\Policies\CustomerPolicy;
 use App\Policies\CustomerReceiptPolicy;
+use App\Policies\ExchangeRatePolicy;
 use App\Policies\FixedAssetCategoryPolicy;
 use App\Policies\FixedAssetPolicy;
 use App\Policies\JournalPolicy;
@@ -162,6 +168,24 @@ class AppServiceProvider extends ServiceProvider
         Gate::policy(FixedAssetCategory::class, FixedAssetCategoryPolicy::class);
 
         /*
+         | Phase 14 policies.
+         |
+         | Currency is registered although it is not company-scoped: the global
+         | resource still has its own capability set, and registering the policy
+         | explicitly keeps the "no convention-discovered policies" rule this
+         | provider has followed since Phase 4 - a policy that stops being applied
+         | when a class moves fails silently.
+         |
+         | ExchangeRate gets its own policy because it is its own model with its
+         | own lifecycle. CompanyFxSetting gets one too, gated on the FX-update
+         | capability rather than on the company-settings set, because the role
+         | that posts foreign settlements is the one that must name the accounts.
+         */
+        Gate::policy(Currency::class, CurrencyPolicy::class);
+        Gate::policy(ExchangeRate::class, ExchangeRatePolicy::class);
+        Gate::policy(CompanyFxSetting::class, CompanyFxSettingPolicy::class);
+
+        /*
          | Accounting route binding.
          |
          | Registered here rather than in each controller so the tenant check
@@ -259,6 +283,15 @@ class AppServiceProvider extends ServiceProvider
          */
         $scoped('fixedAsset', FixedAsset::class);
         $scoped('fixedAssetCategory', FixedAssetCategory::class);
+
+        /*
+         | Phase 14. An exchange rate carries company_id, so the same property
+         | holds: a rate reaching a controller is already known to belong to the
+         | active company and a foreign id 404s before any method runs. Currency
+         | is deliberately absent - it is global reference data with no company_id
+         | to scope by, so it resolves through Laravel's ordinary model binding.
+         */
+        $scoped('exchangeRate', ExchangeRate::class);
     }
 
     /**

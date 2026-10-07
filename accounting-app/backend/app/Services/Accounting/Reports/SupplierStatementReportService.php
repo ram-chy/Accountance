@@ -9,7 +9,6 @@ use App\Models\Customer;
 use App\Models\PurchaseBill;
 use App\Models\Supplier;
 use App\Models\SupplierPayment;
-use App\Support\Money;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 
@@ -47,7 +46,10 @@ class SupplierStatementReportService extends CounterpartyStatementReportService
                 'type' => 'payment',
                 'reference' => $payment->payment_number,
                 'description' => $payment->reference ?? $payment->notes,
-                'amount' => Money::of($payment->amount),
+                'amount' => $payment->baseAmount(),
+                'currency_code' => $payment->currency_id ? $payment->currency?->code : $company->currency?->code,
+                'exchange_rate' => $payment->exchange_rate,
+                'foreign_amount' => $payment->isForeignCurrency() ? $payment->amountMoney()->toDatabase() : null,
             ]);
     }
 
@@ -67,7 +69,10 @@ class SupplierStatementReportService extends CounterpartyStatementReportService
                 'type' => 'bill',
                 'reference' => $bill->bill_number,
                 'description' => $bill->notes,
-                'amount' => Money::of($bill->grand_total),
+                'amount' => $bill->baseGrandTotal(),
+                'currency_code' => $bill->currency_id ? $bill->currency?->code : $company->currency?->code,
+                'exchange_rate' => $bill->exchange_rate,
+                'foreign_amount' => $bill->isForeignCurrency() ? $bill->grandTotalAmount()->toDatabase() : null,
             ]);
     }
 

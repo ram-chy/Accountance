@@ -102,8 +102,13 @@ class JournalPostingService
              * 3. Lines. Re-loaded with the lock held rather than trusting the
              * caller's relation, so the validation sees committed state and not
              * whatever the route-bound model happened to carry.
+             *
+             * The currency relation is eager-loaded here because the FX re-check
+             * below walks every foreign line; lazy-loading it would issue one query
+             * per foreign line on a posting that has already taken an exclusive lock
+             * and cannot afford to be slow.
              */
-            $lines = $fresh->lines()->get();
+            $lines = $fresh->lines()->with('currency')->get();
 
             // 4. Structure: at least two lines, each one-sided and non-zero.
             // 5. Balance: SUM(debit) = SUM(credit), in exact decimal.
@@ -117,6 +122,7 @@ class JournalPostingService
             $accountIds = $lines->pluck('account_id')->unique();
 
             $journalAccounts = Account::query()
+                ->with('currency')
                 ->where('company_id', $fresh->company_id)
                 ->whereIn('id', $accountIds)
                 ->get();
@@ -130,6 +136,21 @@ class JournalPostingService
             foreach ($journalAccounts as $account) {
                 $this->accounts->assertUsableForPosting($account);
             }
+
+            /*
+             * 6b. Phase 14: a foreign line must still agree with its own rate, and
+             * the account it touches must still be willing to hold that currency.
+             *
+             * Placed after the account lookup rather than before it, because the
+             * currency check needs the accounts. It runs on the persisted rows
+             * rather than on any payload, which is the point of posting: this is the
+             * last moment before the entry becomes part of the permanent record, and
+             * it is the last moment a still-editable draft can be caught.
+             */
+            $this->journals->assertPersistedFxValid(
+                $lines,
+                $journalAccounts->keyBy(fn (Account $account) => (int) $account->getKey())->all(),
+            );
 
             // 7. Period: the accounting date must land in an open period.
             $this->periods->assertPostableDate(

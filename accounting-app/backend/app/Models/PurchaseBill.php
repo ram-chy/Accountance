@@ -6,6 +6,7 @@ use App\Enums\NoteType;
 use App\Enums\PaymentStatus;
 use App\Enums\TransactionStatus;
 use App\Support\Money;
+use App\Support\Rate;
 use Database\Factories\PurchaseBillFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Builder;
@@ -25,6 +26,8 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
     'grand_total',
     'notes',
     'tax_account_id',
+    'currency_id',
+    'exchange_rate',
 ])]
 class PurchaseBill extends Model
 {
@@ -49,6 +52,73 @@ class PurchaseBill extends Model
     public function supplier(): BelongsTo
     {
         return $this->belongsTo(Supplier::class);
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | Currency (Phase 14)
+    |--------------------------------------------------------------------------
+    |
+    |  The transaction currency is null - meaning the company's base -
+    | unless a foreign currency was chosen. The existing amount columns were neither
+    | renamed nor duplicated; base_grand_total and base_tax_total are additional
+    | columns written once at posting, and the rate is a snapshot rather than a
+    | lookup so a later rate correction cannot revalue a posted document.
+    */
+
+    public function currency(): BelongsTo
+    {
+        return $this->belongsTo(Currency::class, 'currency_id');
+    }
+
+    /**
+     * Was this document raised in a currency other than the company's base?
+     */
+    public function isForeignCurrency(): bool
+    {
+        return $this->currency_id !== null;
+    }
+
+    /**
+     * The rate snapshot, or null for a base-currency document.
+     */
+    public function exchangeRate(): ?Rate
+    {
+        return $this->exchange_rate === null ? null : Rate::of($this->exchange_rate);
+    }
+
+    /**
+     * The grand total in the company's base currency.
+     *
+     * Prefers the value stored at posting; falls back to converting the transaction
+     * total at the current rate snapshot so a draft can be previewed in base terms.
+     * Never used on the posting path, where the converted figure is written rather
+     * than re-derived.
+     */
+    public function baseGrandTotal(): Money
+    {
+        if ($this->base_grand_total !== null) {
+            return Money::of($this->base_grand_total);
+        }
+
+        $rate = $this->exchangeRate();
+
+        return $rate === null
+            ? $this->grandTotalAmount()
+            : $rate->applyTo($this->grandTotalAmount());
+    }
+
+    public function baseTaxTotal(): Money
+    {
+        if ($this->base_tax_total !== null) {
+            return Money::of($this->base_tax_total);
+        }
+
+        $rate = $this->exchangeRate();
+
+        return $rate === null
+            ? $this->taxAmount()
+            : $rate->applyTo($this->taxAmount());
     }
 
     public function journal(): BelongsTo

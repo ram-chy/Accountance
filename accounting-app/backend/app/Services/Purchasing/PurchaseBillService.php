@@ -10,6 +10,7 @@ use App\Models\PurchaseBill;
 use App\Models\Supplier;
 use App\Models\User;
 use App\Services\Accounting\AccountingPeriodService;
+use App\Services\Accounting\Currency\DocumentCurrencyService;
 use App\Services\Accounting\DocumentCalculator;
 use App\Services\Accounting\DocumentNumberSequence;
 use App\Services\Accounting\DocumentTaxContext;
@@ -40,6 +41,7 @@ class PurchaseBillService
         private readonly DocumentCalculator $calculator,
         private readonly TransactionAccountResolver $accounts,
         private readonly SupplierService $suppliers,
+        private readonly DocumentCurrencyService $currencies,
     ) {}
 
     /**
@@ -59,6 +61,8 @@ class PurchaseBillService
                 'notes' => $data['notes'] ?? null,
                 'tax_account_id' => $data['tax_account_id'] ?? null,
             ]);
+
+            $this->applyCurrency($company, $bill, $data);
 
             $bill->forceFill([
                 'company_id' => $company->getKey(),
@@ -111,6 +115,8 @@ class PurchaseBillService
                 $fresh->tax_account_id = $data['tax_account_id'];
             }
 
+            $this->applyCurrency($company, $fresh, $data);
+
             $fresh->save();
 
             if (array_key_exists('lines', $data)) {
@@ -143,6 +149,44 @@ class PurchaseBillService
      *
      * @throws ValidationException
      */
+    /**
+     * Resolve the bill's transaction currency and snapshot the rate of its date.
+     *
+     * Identical in purpose to SalesInvoiceService::applyCurrency - the draft's rate
+     * is a preview so the bill can be read in both currencies while it is edited,
+     * and PurchaseBillPostingService re-resolves it at posting because the rate table
+     * is mutable history. Only the currency or the date being in the payload
+     * re-triggers the lookup, so a line-only edit cannot be blocked by a rate row
+     * being deactivated in between.
+     *
+     * The method mutates the model and does not save, so re-dating and
+     * re-denominating land in a single write.
+     *
+     * @param  array<string, mixed>  $data
+     *
+     * @throws ValidationException
+     */
+    private function applyCurrency(Company $company, PurchaseBill $bill, array $data): void
+    {
+        if (! array_key_exists('currency_id', $data) && ! array_key_exists('bill_date', $data)) {
+            return;
+        }
+
+        $currencyId = array_key_exists('currency_id', $data)
+            ? $data['currency_id']
+            : $bill->currency_id;
+
+        $context = $this->currencies->resolve(
+            $company,
+            $currencyId,
+            (string) $bill->bill_date,
+            'currency_id',
+        );
+
+        $bill->currency_id = $context->currency?->getKey();
+        $bill->exchange_rate = $context->rateToPersist();
+    }
+
     private function writeLines(Company $company, PurchaseBill $bill, array $lines): void
     {
         /*

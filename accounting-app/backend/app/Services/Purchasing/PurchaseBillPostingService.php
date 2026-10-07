@@ -6,9 +6,12 @@ use App\Enums\JournalSource;
 use App\Enums\TransactionStatus;
 use App\Exceptions\ConflictException;
 use App\Models\Account;
+use App\Models\JournalLine;
 use App\Models\PurchaseBill;
 use App\Models\PurchaseBillLine;
 use App\Models\User;
+use App\Services\Accounting\Currency\DocumentCurrencyService;
+use App\Services\Accounting\Currency\TransactionCurrency;
 use App\Services\Accounting\JournalPostingService;
 use App\Services\Accounting\JournalService;
 use App\Services\Accounting\TransactionAccountResolver;
@@ -43,6 +46,7 @@ class PurchaseBillPostingService
         private readonly JournalService $journals,
         private readonly JournalPostingService $posting,
         private readonly TransactionAccountResolver $accounts,
+        private readonly DocumentCurrencyService $currencies,
     ) {}
 
     /**
@@ -115,6 +119,20 @@ class PurchaseBillPostingService
                 ? $this->resolveInputTaxAccount($fresh)
                 : null;
 
+            /*
+             * The currency context, resolved at posting rather than read off the
+             * draft. See SalesInvoicePostingService for why: the draft's rate is a
+             * preview of a mutable rate table, and this is the last moment the bill
+             * can be priced. One resolved rate is written to the header, the lines and
+             * the journal together.
+             */
+            $transaction = $this->currencies->resolve(
+                $fresh->company,
+                $fresh->currency_id,
+                Carbon::parse($fresh->bill_date)->toDateString(),
+                'currency_id',
+            );
+
             $journal = $this->journals->createDraft(
                 $fresh->company,
                 $actor,
@@ -124,11 +142,26 @@ class PurchaseBillPostingService
                     'reference' => $fresh->bill_number,
                     'source_type' => JournalSource::PurchaseBill->value,
                     'source_id' => $fresh->getKey(),
-                    'lines' => $this->journalLines($expenseByAccount, $inputTaxAccount, $payable, $grandTotal, $taxTotal),
+                    'lines' => $this->journalLines($transaction, $expenseByAccount, $inputTaxAccount, $payable, $grandTotal, $taxTotal),
                 ],
             );
 
             $this->posting->post($journal, $actor, 'bill_date');
+
+            /*
+             * The bill's base figures, read back out of the journal rather than
+             * converted a second time, for the reason given in
+             * DocumentCurrencyService::baseAmountBooked.
+             */
+            $booked = $journal->lines()->get();
+
+            $baseGrandTotal = $this->currencies->baseAmountBooked($booked, (int) $payable->getKey());
+
+            $baseTaxTotal = $inputTaxAccount === null
+                ? Money::zero()
+                : $this->currencies->baseAmountBooked($booked, (int) $inputTaxAccount->getKey());
+
+            $this->writeBaseTaxAmounts($fresh, $transaction, $booked, $inputTaxAccount);
 
             $fresh->forceFill([
                 'status' => TransactionStatus::Posted->value,
@@ -139,10 +172,67 @@ class PurchaseBillPostingService
                 'discount_total' => $totals['discount_total'],
                 'tax_total' => $totals['tax_total'],
                 'grand_total' => $totals['grand_total'],
+                'currency_id' => $transaction->currency?->getKey(),
+                'exchange_rate' => $transaction->rateToPersist(),
+                'base_grand_total' => $baseGrandTotal?->toDatabase(),
+                'base_tax_total' => $baseTaxTotal->toDatabase(),
             ])->save();
 
             return $fresh->refresh();
         });
+    }
+
+    /**
+     * Record each bill line's input tax in base currency, from the posted journal.
+     *
+     * The distribution rule - every line but the last converted at the document rate,
+     * the last taking the remainder - is the same one SalesInvoicePostingService
+     * applies, and for the same reason: a journal line holds one foreign amount and
+     * one rate, so the tax debit on the journal is a single conversion of the
+     * document's tax total, and the per-line figures that must add up to it cannot
+     * each be an independent conversion.
+     *
+     * @param  Collection<int, JournalLine>  $booked
+     */
+    private function writeBaseTaxAmounts(
+        PurchaseBill $bill,
+        TransactionCurrency $transaction,
+        Collection $booked,
+        ?Account $inputTaxAccount
+    ): void {
+        $bookedTax = $inputTaxAccount === null
+            ? null
+            : $this->currencies->baseAmountBooked($booked, (int) $inputTaxAccount->getKey());
+
+        if ($bookedTax === null) {
+            return;
+        }
+
+        $taxable = $bill->lines()
+            ->where('tax_amount', '>', 0)
+            ->orderBy('line_number')
+            ->get();
+
+        if ($taxable->isEmpty()) {
+            return;
+        }
+
+        $remaining = $bookedTax;
+        $lastIndex = $taxable->count() - 1;
+
+        foreach ($taxable as $position => $line) {
+            $share = $position === $lastIndex
+                ? $remaining
+                : $this->currencies->toBase(Money::of($line->tax_amount), $transaction);
+
+            if ($share->greaterThan($remaining)) {
+                $share = $remaining;
+            }
+
+            $line->forceFill(['base_tax_amount' => $share->toDatabase()])->save();
+
+            $remaining = $remaining->minus($share);
+        }
     }
 
     /**
@@ -188,10 +278,19 @@ class PurchaseBillPostingService
     }
 
     /**
+     * Describe the journal entry, in the document's own currency.
+     *
+     * As on the sales side, no base amount appears here: JournalService derives it
+     * from the bill's rate, so there is one conversion in the system rather than one
+     * per posting path. Amounts are grouped by account in the foreign currency
+     * before conversion, so the arithmetic a reader checks by hand is the arithmetic
+     * that was performed.
+     *
      * @param  array<int, Money>  $expenseByAccount
      * @return array<int, array<string, mixed>>
      */
     private function journalLines(
+        TransactionCurrency $transaction,
         array $expenseByAccount,
         ?Account $inputTaxAccount,
         Account $payable,
@@ -201,29 +300,32 @@ class PurchaseBillPostingService
         $lines = [];
 
         foreach ($expenseByAccount as $accountId => $amount) {
-            $lines[] = [
-                'account_id' => $accountId,
-                'description' => 'Expense / purchases',
-                'debit' => $amount->toDatabase(),
-                'credit' => '0',
-            ];
+            $lines[] = $this->currencies->journalLine(
+                $transaction,
+                (int) $accountId,
+                'Expense / purchases',
+                $amount,
+                true
+            );
         }
 
         if ($inputTaxAccount !== null) {
-            $lines[] = [
-                'account_id' => $inputTaxAccount->getKey(),
-                'description' => 'Input tax',
-                'debit' => $taxTotal->toDatabase(),
-                'credit' => '0',
-            ];
+            $lines[] = $this->currencies->journalLine(
+                $transaction,
+                (int) $inputTaxAccount->getKey(),
+                'Input tax',
+                $taxTotal,
+                true
+            );
         }
 
-        $lines[] = [
-            'account_id' => $payable->getKey(),
-            'description' => 'Accounts Payable',
-            'debit' => '0',
-            'credit' => $grandTotal->toDatabase(),
-        ];
+        $lines[] = $this->currencies->journalLine(
+            $transaction,
+            (int) $payable->getKey(),
+            'Accounts Payable',
+            $grandTotal,
+            false
+        );
 
         return $lines;
     }

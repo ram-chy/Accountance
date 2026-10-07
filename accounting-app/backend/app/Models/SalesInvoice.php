@@ -6,6 +6,7 @@ use App\Enums\NoteType;
 use App\Enums\PaymentStatus;
 use App\Enums\TransactionStatus;
 use App\Support\Money;
+use App\Support\Rate;
 use Database\Factories\SalesInvoiceFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Builder;
@@ -25,6 +26,8 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
     'grand_total',
     'notes',
     'tax_account_id',
+    'currency_id',
+    'exchange_rate',
 ])]
 class SalesInvoice extends Model
 {
@@ -49,6 +52,86 @@ class SalesInvoice extends Model
     public function customer(): BelongsTo
     {
         return $this->belongsTo(Customer::class);
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | Currency (Phase 14)
+    |--------------------------------------------------------------------------
+    |
+    | subtotal / tax_total / grand_total are amounts in the invoice's own currency,
+    | which is null-currency_id (the company's base) unless a foreign currency was
+    | chosen. They were never renamed or duplicated - see the documents migration
+    | for why base_grand_total exists but base_subtotal does not.
+    |
+    | base_grand_total and base_tax_total are written ONCE, at posting, and never
+    | recomputed. base_tax_total in particular is not derivable from the tax report
+    | later without re-deriving a conversion that this row already performed.
+    |
+    | The rate is a snapshot, not a lookup. Re-reading the rate table would let a
+    | rate correction silently revalue a posted invoice, which is the single most
+    | damaging thing a multi-currency system can do to an accounting record.
+    */
+
+    public function currency(): BelongsTo
+    {
+        return $this->belongsTo(Currency::class, 'currency_id');
+    }
+
+    /**
+     * Was this invoice raised in a currency other than the company's base?
+     */
+    public function isForeignCurrency(): bool
+    {
+        return $this->currency_id !== null;
+    }
+
+    /**
+     * The rate snapshot: base currency per one unit of the invoice currency.
+     *
+     * Returns null for a base-currency invoice, and Rate::one() rather than null
+     * when a caller explicitly wants the identity - baseAmount() below is the usual
+     * way to ask.
+     */
+    public function exchangeRate(): ?Rate
+    {
+        return $this->exchange_rate === null ? null : Rate::of($this->exchange_rate);
+    }
+
+    /**
+     * The invoice's grand total in the company's base currency.
+     *
+     * Before posting this falls back to converting grand_total at the current rate
+     * snapshot, so a draft can be displayed in base terms - a read-only preview,
+     * clearly distinguishable from the stored figure because that one is null until
+     * the invoice is posted. After posting the stored value wins, unconditionally.
+     *
+     * The fallback is deliberately NOT used for anything that writes to the ledger.
+     */
+    public function baseGrandTotal(): Money
+    {
+        if ($this->base_grand_total !== null) {
+            return Money::of($this->base_grand_total);
+        }
+
+        $rate = $this->exchangeRate();
+
+        return $rate === null
+            ? $this->grandTotalAmount()
+            : $rate->applyTo($this->grandTotalAmount());
+    }
+
+    public function baseTaxTotal(): Money
+    {
+        if ($this->base_tax_total !== null) {
+            return Money::of($this->base_tax_total);
+        }
+
+        $rate = $this->exchangeRate();
+
+        return $rate === null
+            ? $this->taxAmount()
+            : $rate->applyTo($this->taxAmount());
     }
 
     public function journal(): BelongsTo

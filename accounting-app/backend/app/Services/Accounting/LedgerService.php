@@ -226,6 +226,10 @@ class LedgerService
                 'journal_lines.description',
                 'journal_lines.debit',
                 'journal_lines.credit',
+                'journal_lines.currency_id',
+                'journal_lines.foreign_debit',
+                'journal_lines.foreign_credit',
+                'journal_lines.exchange_rate',
             ])
             ->get();
 
@@ -249,6 +253,14 @@ class LedgerService
 
             $running = $this->rules->signedBalance($runningDebit, $runningCredit, $normalBalance);
 
+            /*
+             * §22: the base debit/credit above remain authoritative; these four
+             * are explanatory provenance for a foreign line and null on a
+             * base-currency one. Returning them on every row keeps the shape
+             * stable so a client never has to guess whether the key exists.
+             */
+            $isForeign = $row->currency_id !== null;
+
             return [
                 'journal_number' => $row->journal_number,
                 'journal_date' => Carbon::parse($row->journal_date)->toDateString(),
@@ -256,6 +268,14 @@ class LedgerService
                 'debit' => (string) $debit,
                 'credit' => (string) $credit,
                 'running_balance' => (string) $running,
+                'currency_id' => $isForeign ? (int) $row->currency_id : null,
+                'exchange_rate' => $row->exchange_rate,
+                'foreign_debit' => $isForeign && $row->foreign_debit !== null
+                    ? Money::of((string) $row->foreign_debit)->toDatabase()
+                    : null,
+                'foreign_credit' => $isForeign && $row->foreign_credit !== null
+                    ? Money::of((string) $row->foreign_credit)->toDatabase()
+                    : null,
             ];
         });
     }

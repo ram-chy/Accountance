@@ -78,6 +78,13 @@ class TrialBalanceReportService extends JournalReportService
 
         return [
             'period' => $this->period($from, $to),
+            /*
+             * §21.1 / §23: every figure here is base-currency only. Foreign
+             * transaction metadata does not create a second trial balance - the
+             * debit and credit totals come from `journal_lines.debit/credit`,
+             * which are always the company's functional currency.
+             */
+            'base_currency' => $this->baseCurrency($company),
             'rows' => $rows,
             'totals' => [
                 'debit_total' => $this->amount($totalDebit),

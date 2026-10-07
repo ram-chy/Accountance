@@ -3,6 +3,7 @@
 namespace App\Services\Accounting;
 
 use App\Enums\AccountType;
+use App\Enums\CashBankTransactionType;
 use App\Enums\FixedAssetAcquisitionMethod;
 use App\Enums\NormalBalance;
 use App\Models\Account;
@@ -189,6 +190,68 @@ class TransactionAccountResolver
         }
 
         return $account;
+    }
+
+    /**
+     * Two accounts may only move money between each other if they can both hold it.
+     *
+     * A cash/bank transaction is one amount crossing two accounts, so the currency
+     * of that amount has to be one both accounts are willing to hold. Accounts that
+     * declare no currency are willing to hold anything - see
+     * Account::acceptsCurrency() - so a transfer between a declared account and an
+     * undeclared one is fine, and only a genuine disagreement is a problem.
+     *
+     * WHY A DISAGREEMENT IS REFUSED RATHER THAN CONVERTED
+     *
+     * Moving 10,000 EUR out of a EUR account and 10,900 USD into a USD account is
+     * not one movement of one amount. It is two movements at two rates, and the
+     * 900.00 between them is a realized gain that has to be posted to a gain account.
+     * CashBankPostingService writes one balanced journal per transaction, so that
+     * needs either a second journal or a third line the document has no field for.
+     *
+     * Converting at one rate and posting two lines is the shortcut, and it is the
+     * dangerous one: the entry would balance, the transaction would post, and
+     * nothing anywhere would disagree with it until the year-end FX review. So the
+     * combination is refused, and the message says what to do instead.
+     *
+     * This lives here rather than in the draft service because both the draft
+     * service and the posting service must apply it. A posting service re-validates
+     * everything the draft service checked precisely so that a document which
+     * reached it by some other route cannot skip the rule, and that guarantee only
+     * means something if there is one implementation to re-validate against.
+     *
+     * @throws ValidationException
+     */
+    public function assertSameDenomination(
+        Account $source,
+        Account $destination,
+        CashBankTransactionType $type,
+        string $field = 'destination_account_id',
+    ): void {
+        // Only a transfer needs both sides to be cash/bank, and only a transfer can
+        // put two declared currencies face to face. On a deposit or a withdrawal the
+        // currency the account may hold is the transaction's own, and that is
+        // enforced per account by DocumentCurrencyService::assertAccountAccepts.
+        if (! $type->requiresBothAccountsCashBank()) {
+            return;
+        }
+
+        if ($source->currency_id === null || $destination->currency_id === null) {
+            return;
+        }
+
+        if ((int) $source->currency_id === (int) $destination->currency_id) {
+            return;
+        }
+
+        throw ValidationException::withMessages([
+            $field => sprintf(
+                'A transfer cannot move [%s] into an account holding [%s]. '
+                .'Book it as two separate movements and reclassify the difference between them.',
+                $source->currency?->code ?? 'an unstated currency',
+                $destination->currency?->code ?? 'an unstated currency',
+            ),
+        ]);
     }
 
     /**

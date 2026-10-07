@@ -9,6 +9,7 @@ use App\Models\Customer;
 use App\Models\CustomerReceipt;
 use App\Models\User;
 use App\Services\Accounting\AccountingPeriodService;
+use App\Services\Accounting\Currency\DocumentCurrencyService;
 use App\Services\Accounting\DocumentNumberSequence;
 use App\Services\Accounting\PaymentAllocationService;
 use App\Services\Accounting\TransactionAccountResolver;
@@ -37,6 +38,7 @@ class CustomerReceiptService
         private readonly TransactionAccountResolver $accounts,
         private readonly PaymentAllocationService $allocations,
         private readonly CustomerService $customers,
+        private readonly DocumentCurrencyService $currencies,
     ) {}
 
     /**
@@ -46,9 +48,26 @@ class CustomerReceiptService
     {
         $customer = $this->resolveCustomer($company, $data['customer_id']);
 
-        $this->accounts->payment($company, $data['payment_account_id']);
+        $paymentAccount = $this->accounts->payment($company, $data['payment_account_id']);
 
-        return DB::transaction(function () use ($company, $actor, $data, $customer) {
+        /*
+         * The currency of the money actually received, resolved BEFORE the receipt
+         * exists so an unpriceable currency is refused at draft time rather than at
+         * posting. The payment account is checked here as well as in the journal,
+         * because the cash leg is the one line that genuinely needs an account
+         * holding this currency: USD received into an IDR-only cash account is not a
+         * rounding question, it is money the company does not have.
+         */
+        $context = $this->currencies->resolve(
+            $company,
+            $data['currency_id'] ?? null,
+            (string) $data['receipt_date'],
+            'currency_id',
+        );
+
+        $this->currencies->assertAccountAccepts($paymentAccount, $context, 'payment_account_id');
+
+        return DB::transaction(function () use ($company, $actor, $data, $customer, $context) {
             $number = $this->numbers->nextFor($company, DocumentNumberType::Receipt);
 
             $receipt = new CustomerReceipt([
@@ -64,6 +83,8 @@ class CustomerReceiptService
                 'company_id' => $company->getKey(),
                 'receipt_number' => $number,
                 'status' => PaymentStatus::Draft->value,
+                'currency_id' => $context->currency?->getKey(),
+                'exchange_rate' => $context->rateToPersist(),
                 'created_by' => $actor->getKey(),
             ])->save();
 
@@ -120,6 +141,38 @@ class CustomerReceiptService
                 if (array_key_exists($field, $data)) {
                     $fresh->{$field} = $data[$field];
                 }
+            }
+
+            /*
+             * Re-resolved when either the currency or the date is in the payload, for
+             * the same reason SalesInvoiceService::applyCurrency does: either one
+             * changes the rate of record, and a line-only edit must not be refused
+             * because a rate row was deactivated in the meantime.
+             *
+             * The payment account is re-checked alongside it because changing the
+             * currency of a receipt changes which account may hold it. Checking only
+             * one of the two would let a receipt be re-denominated into an account
+             * that cannot hold the money.
+             */
+            $denominationChanged = array_key_exists('currency_id', $data)
+                || array_key_exists('receipt_date', $data);
+
+            if ($denominationChanged) {
+                $context = $this->currencies->resolve(
+                    $company,
+                    array_key_exists('currency_id', $data) ? $data['currency_id'] : $fresh->currency_id,
+                    (string) $fresh->receipt_date,
+                    'currency_id',
+                );
+
+                $this->currencies->assertAccountAccepts(
+                    $this->accounts->payment($company, $fresh->payment_account_id),
+                    $context,
+                    'payment_account_id',
+                );
+
+                $fresh->currency_id = $context->currency?->getKey();
+                $fresh->exchange_rate = $context->rateToPersist();
             }
 
             $fresh->save();

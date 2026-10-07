@@ -65,23 +65,44 @@ use JsonSerializable;
 class AuditService
 {
     /**
-     * Field names whose values are replaced before anything is persisted. Case
-     * insensitive and matched at every depth. This list is about credentials and
-     * secrets specifically: it is a deny-list of things that must never be
-     * written, not an allow-list of everything that may.
+     * Keys whose value is replaced with a marker before an audit row is written.
+     *
+     * Matched after lowercasing AND normalising separators, so an HTTP header name
+     * (`Authorization`, `X-CSRF-Token`, `Set-Cookie`) hits the same entry as the
+     * snake_case field (`authorization`, `csrf_token`, `set_cookie`). Cookies and
+     * sessions are listed because a whole request can be logged as context, and a
+     * `Cookie` header or a serialised session carries a bearer credential just as
+     * surely as a `token` field does - the rule is "never persist credential
+     * material", and it has to hold wherever the material is parked.
+     *
+     * Only exact key matches are redacted. A substring rule (`anything containing
+     * "token"`) was rejected because it would silently blank legitimate fields such
+     * as `token_count`, and a false redaction is indistinguishable from a deleted
+     * value to anyone reading the audit trail later.
+     *
+     * @var list<string>
      */
     private const REDACTED_FIELDS = [
         'password',
         'password_confirmation',
         'current_password',
         'remember_token',
+        'token',
         'access_token',
         'refresh_token',
-        'token',
         'otp',
-        'secret',
         'api_key',
+        'secret',
         'authorization',
+        'cookie',
+        'cookies',
+        'set_cookie',
+        'session',
+        'session_id',
+        'csrf_token',
+        'xsrf_token',
+        'x_csrf_token',
+        'x_xsrf_token',
     ];
 
     private const REDACTED_PLACEHOLDER = '[REDACTED]';
@@ -403,13 +424,18 @@ class AuditService
 
     /**
      * Replace every value under a deny-listed key, at any depth, with a marker.
+     *
+     * The key is normalised the same way the deny-list is written - lowercased with
+     * `-` folded to `_` - so `X-CSRF-Token`, `x_csrf_token` and `X-CSRF-TOKEN` all
+     * resolve to the one entry. Non-string keys (numeric list indices) are left as
+     * they are and simply recursed into.
      */
     private function scrub(array $data): array
     {
         $clean = [];
 
         foreach ($data as $key => $value) {
-            if (is_string($key) && in_array(strtolower($key), self::REDACTED_FIELDS, true)) {
+            if (is_string($key) && in_array($this->normaliseKey($key), self::REDACTED_FIELDS, true)) {
                 $clean[$key] = self::REDACTED_PLACEHOLDER;
 
                 continue;
@@ -419,6 +445,14 @@ class AuditService
         }
 
         return $clean;
+    }
+
+    /**
+     * Fold a key into the canonical form the deny-list is written in.
+     */
+    private function normaliseKey(string $key): string
+    {
+        return str_replace('-', '_', strtolower(trim($key)));
     }
 
     private function requestId(): ?string

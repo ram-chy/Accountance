@@ -31,6 +31,28 @@ final class SchemaCheck
         );
     }
 
+    /**
+     * Remove a named CHECK, for the down() of a migration that drops a column one
+     * references.
+     *
+     * MySQL error 3959: "Check constraint 'x' uses column 'y', hence column cannot
+     * be dropped or renamed." A constraint outlives the statement that created it,
+     * so down() has to take it out explicitly first - dropping the whole table does
+     * not need this, and that is why the create-migrations never call it.
+     *
+     * Guarded by the same enforcedByServer() check as add(), for the same reason:
+     * if the constraints were never created there is nothing to remove, and the
+     * rollback must not fail trying.
+     */
+    public static function drop(string $table, string $name): void
+    {
+        if (! self::enforcedByServer()) {
+            return;
+        }
+
+        DB::statement("alter table `{$table}` drop constraint `{$name}`");
+    }
+
     private static function enforcedByServer(): bool
     {
         $driver = DB::connection()->getDriverName();

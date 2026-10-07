@@ -5,6 +5,7 @@ namespace App\Models;
 use App\Enums\CashBankTransactionType;
 use App\Enums\PaymentStatus;
 use App\Support\Money;
+use App\Support\Rate;
 use Database\Factories\CashBankTransactionFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -50,6 +51,8 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
     'amount',
     'reference',
     'notes',
+    'currency_id',
+    'exchange_rate',
 ])]
 class CashBankTransaction extends Model
 {
@@ -128,6 +131,62 @@ class CashBankTransaction extends Model
     public function amountMoney(): Money
     {
         return Money::of($this->amount);
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | Currency (Phase 14)
+    |--------------------------------------------------------------------------
+    |
+    | One currency for the whole transaction, and the reason there is not one per
+    | leg is stated in the migration: a cross-currency bank transfer needs a rate
+    | for its destination leg that is not derivable from its source, which means two
+    | journal legs at two rates plus an FX reclassification - a second journal from
+    | one document. CashBankPostingService refuses that case rather than converting
+    | the amount at one rate and posting a journal that balances but is wrong.
+    |
+    | Account currency RESTRICTION applies: an account that declares a currency must
+    * match this transaction's, which is what stops a EUR feed line landing in a
+    * USD-denominated bank account. Accounts with no declared currency accept
+    | anything, so no existing chart of accounts needs changing.
+    */
+
+    public function currency(): BelongsTo
+    {
+        return $this->belongsTo(Currency::class, 'currency_id');
+    }
+
+    public function isForeignCurrency(): bool
+    {
+        return $this->currency_id !== null;
+    }
+
+    /**
+     * The rate snapshot, or null for a base-currency movement.
+     */
+    public function exchangeRate(): ?Rate
+    {
+        return $this->exchange_rate === null ? null : Rate::of($this->exchange_rate);
+    }
+
+    /**
+     * The amount in the company's base currency - what both journal legs record.
+     *
+     * Prefers the stored value; falls back to converting at the current rate
+     * snapshot for a draft preview. The posting path writes the converted figure
+     * rather than re-deriving it.
+     */
+    public function baseAmount(): Money
+    {
+        if ($this->base_amount !== null) {
+            return Money::of($this->base_amount);
+        }
+
+        $rate = $this->exchangeRate();
+
+        return $rate === null
+            ? $this->amountMoney()
+            : $rate->applyTo($this->amountMoney());
     }
 
     /**

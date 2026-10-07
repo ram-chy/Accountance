@@ -3,10 +3,12 @@
 namespace App\Services\Accounting;
 
 use App\Enums\PaymentStatus;
+use App\Models\Currency;
 use App\Models\CustomerReceipt;
 use App\Models\PurchaseBill;
 use App\Models\SalesInvoice;
 use App\Models\SupplierPayment;
+use App\Services\Accounting\Currency\DocumentCurrencyService;
 use App\Support\Money;
 use Illuminate\Support\Collection;
 use Illuminate\Validation\ValidationException;
@@ -39,6 +41,7 @@ class PaymentAllocationService
 {
     public function __construct(
         private readonly SettlementService $settlements,
+        private readonly DocumentCurrencyService $currencies,
     ) {}
 
     /**
@@ -97,7 +100,9 @@ class PaymentAllocationService
         $this->assertAllFound($invoices, $invoiceIds, 'sales_invoice_id', 'invoice');
 
         $this->assertEveryAllocationAssignable(
-            $allocations, $incoming, $invoices, $receipt->customer_id, 'sales_invoice_id',
+            $allocations, $incoming, $invoices, $receipt->customer_id,
+            $receipt->currency_id === null ? null : (int) $receipt->currency_id,
+            'sales_invoice_id',
             fn (SalesInvoice $invoice): Money => $this->outstandingFor($invoice),
         );
 
@@ -107,6 +112,7 @@ class PaymentAllocationService
             $receipt->allocations()->create([
                 'sales_invoice_id' => $invoiceId,
                 'amount' => $amount->toDatabase(),
+                'base_amount' => $this->carryingBaseFor($invoices[$invoiceId], $amount)->toDatabase(),
             ]);
         }
     }
@@ -145,7 +151,9 @@ class PaymentAllocationService
         $this->assertAllFound($bills, $billIds, 'purchase_bill_id', 'bill');
 
         $this->assertEveryAllocationAssignable(
-            $allocations, $incoming, $bills, $payment->supplier_id, 'purchase_bill_id',
+            $allocations, $incoming, $bills, $payment->supplier_id,
+            $payment->currency_id === null ? null : (int) $payment->currency_id,
+            'purchase_bill_id',
             fn (PurchaseBill $bill): Money => $this->outstandingForBill($bill),
         );
 
@@ -155,8 +163,34 @@ class PaymentAllocationService
             $payment->allocations()->create([
                 'purchase_bill_id' => $billId,
                 'amount' => $amount->toDatabase(),
+                'base_amount' => $this->carryingBaseFor($bills[$billId], $amount)->toDatabase(),
             ]);
         }
+    }
+
+    /**
+     * What this slice of the document was carried at, in base currency.
+     *
+     * THE FIGURE REALIZED EXCHANGE IS MEASURED AGAINST
+     *
+     * An allocation is a slice of a document, so its carrying value is that slice at
+     * the rate the DOCUMENT was booked at - not at the rate the receipt happens to
+     * convert at, and not at today's. A half-settled 200.00 USD invoice booked at 2.5
+     * carries 100.00 x 2.5 = 250.00 on the half that was allocated, and if that half
+     * is later received at 3.0 the 50.00 of difference is realized gain on that half.
+     *
+     * Storing it on the allocation row is what makes that possible later. Reading it
+     * back off the invoice's grand total instead would mean dividing a base total by a
+     * foreign total to get a rate, and rounding a fraction of a unit up or down would
+     * put the last minor unit of the gain or loss on whichever document happened to
+     * settle first.
+     *
+     * A base-currency document has no rate to apply, and carryingBase() returns the
+     * amount itself, so this is a no-op there rather than a special case.
+     */
+    private function carryingBaseFor(SalesInvoice|PurchaseBill $document, Money $amount): Money
+    {
+        return $this->currencies->carryingBase($amount, $document->exchangeRate());
     }
 
     /**
@@ -373,6 +407,7 @@ class PaymentAllocationService
         array $incoming,
         Collection $documents,
         int $counterpartyId,
+        ?int $settlementCurrencyId,
         string $idField,
         callable $outstanding
     ): void {
@@ -383,7 +418,11 @@ class PaymentAllocationService
         foreach ($incoming as $documentId => $amount) {
             try {
                 $this->assertAssignable(
-                    $documents[$documentId], $counterpartyId, $amount, $outstanding($documents[$documentId])
+                    $documents[$documentId],
+                    $counterpartyId,
+                    $settlementCurrencyId,
+                    $amount,
+                    $outstanding($documents[$documentId])
                 );
             } catch (ValidationException $e) {
                 $key = sprintf('allocations.%d.%s', $indexes[$documentId] ?? 0, $idField);
@@ -397,6 +436,74 @@ class PaymentAllocationService
         if ($errors !== []) {
             throw ValidationException::withMessages($errors);
         }
+    }
+
+    /**
+     * Refuse an allocation between a settlement and a document in different
+     * currencies.
+     *
+     * Both null is the base-currency case and passes. One null and one set is the
+     * mixed case that does most of the damage, because the amounts still compare as
+     * numbers.
+     *
+     * @throws ValidationException
+     */
+    private function assertSameCurrency(
+        SalesInvoice|PurchaseBill $document,
+        ?int $settlementCurrencyId,
+        string $field,
+        string $label
+    ): void {
+        $documentCurrencyId = $document->currency_id === null
+            ? null
+            : (int) $document->currency_id;
+
+        if ($documentCurrencyId === $settlementCurrencyId) {
+            return;
+        }
+
+        $documentCode = $document->currency?->code
+            ?? $this->currencyCode($documentCurrencyId)
+            ?? 'the base currency';
+
+        /*
+         * "the base currency" is technically true and useless to the user holding the
+         * form, who has a rate table and a currency picker in front of them and needs
+         * to be told which currency to go and pick.
+         */
+        $settlementCode = $settlementCurrencyId === null
+            ? $this->currencyCode($document->company?->currency_id)
+            : ($this->currencyCode($settlementCurrencyId) ?? 'another currency');
+
+        $number = $document instanceof SalesInvoice
+            ? $document->invoice_number
+            : $document->bill_number;
+
+        throw ValidationException::withMessages([
+            $field => sprintf(
+                'This %s is in [%s] but the settlement is in [%s], so it cannot be settled by it. '
+                .'Allocate a settlement in the same currency as %s.',
+                $label,
+                $documentCode,
+                $settlementCode,
+                $number
+            ),
+        ]);
+    }
+
+    /**
+     * A currency's code, or null if it cannot be read.
+     *
+     * Only reached on the failure path, where one extra query is worth a message
+     * that names a currency rather than a category.
+     */
+    private function currencyCode(?int $currencyId): ?string
+    {
+        if ($currencyId === null) {
+            return null;
+        }
+
+        return Currency::query()->find($currencyId)?->code;
     }
 
     /**
@@ -427,6 +534,7 @@ class PaymentAllocationService
     private function assertAssignable(
         SalesInvoice|PurchaseBill $document,
         int $counterpartyId,
+        ?int $settlementCurrencyId,
         Money $amount,
         Money $outstanding
     ): void {
@@ -455,6 +563,27 @@ class PaymentAllocationService
                     .($isInvoice ? 'customer' : 'supplier').'.',
             ]);
         }
+
+        /*
+         * Currencies must match, and the comparison is on the transaction
+         * currency rather than on the rate.
+         *
+         * A USD receipt does not discharge an IDR invoice. The two amounts are the
+         * same number of minor units and nothing else, so allocating one against
+         * the other would compare 100.00 with 100.00, pass the outstanding check,
+         * and leave the USD customer showing a USD balance that no receipt has
+         * touched while an IDR invoice is marked paid. The customer statement and
+         * the aging report would both be wrong in different directions and nothing
+         * would contradict.
+         *
+         * Converting instead of refusing is the alternative, and it is worse than it
+         * looks: which rate would apply, the receipt's or the invoice's, and on what
+         * date? Either answer invents an exchange the parties never made. A company
+         * that genuinely holds two currencies settles each in its own currency and
+         * nets the two positions deliberately - which is a cash/bank transfer, not
+         * an allocation.
+         */
+        $this->assertSameCurrency($document, $settlementCurrencyId, $field, $label);
 
         if ($amount->greaterThan($outstanding)) {
             $number = $document instanceof SalesInvoice

@@ -9,6 +9,7 @@ use App\Models\Supplier;
 use App\Models\SupplierPayment;
 use App\Models\User;
 use App\Services\Accounting\AccountingPeriodService;
+use App\Services\Accounting\Currency\DocumentCurrencyService;
 use App\Services\Accounting\DocumentNumberSequence;
 use App\Services\Accounting\PaymentAllocationService;
 use App\Services\Accounting\TransactionAccountResolver;
@@ -33,6 +34,7 @@ class SupplierPaymentService
         private readonly TransactionAccountResolver $accounts,
         private readonly PaymentAllocationService $allocations,
         private readonly SupplierService $suppliers,
+        private readonly DocumentCurrencyService $currencies,
     ) {}
 
     /**
@@ -42,9 +44,20 @@ class SupplierPaymentService
     {
         $supplier = $this->resolveSupplier($company, $data['supplier_id']);
 
-        $this->accounts->payment($company, $data['payment_account_id']);
+        $paymentAccount = $this->accounts->payment($company, $data['payment_account_id']);
 
-        return DB::transaction(function () use ($company, $actor, $data, $supplier) {
+        // See CustomerReceiptService::createDraft for why the currency is resolved
+        // before the row exists and why the account is checked here.
+        $context = $this->currencies->resolve(
+            $company,
+            $data['currency_id'] ?? null,
+            (string) $data['payment_date'],
+            'currency_id',
+        );
+
+        $this->currencies->assertAccountAccepts($paymentAccount, $context, 'payment_account_id');
+
+        return DB::transaction(function () use ($company, $actor, $data, $supplier, $context) {
             $number = $this->numbers->nextFor($company, DocumentNumberType::Payment);
 
             $payment = new SupplierPayment([
@@ -60,6 +73,8 @@ class SupplierPaymentService
                 'company_id' => $company->getKey(),
                 'payment_number' => $number,
                 'status' => PaymentStatus::Draft->value,
+                'currency_id' => $context->currency?->getKey(),
+                'exchange_rate' => $context->rateToPersist(),
                 'created_by' => $actor->getKey(),
             ])->save();
 
@@ -106,6 +121,26 @@ class SupplierPaymentService
                 if (array_key_exists($field, $data)) {
                     $fresh->{$field} = $data[$field];
                 }
+            }
+
+            // See CustomerReceiptService::updateDraft: either field moves the rate of
+            // record, and re-denominating a payment re-checks the account holding it.
+            if (array_key_exists('currency_id', $data) || array_key_exists('payment_date', $data)) {
+                $context = $this->currencies->resolve(
+                    $company,
+                    array_key_exists('currency_id', $data) ? $data['currency_id'] : $fresh->currency_id,
+                    (string) $fresh->payment_date,
+                    'currency_id',
+                );
+
+                $this->currencies->assertAccountAccepts(
+                    $this->accounts->payment($company, $fresh->payment_account_id),
+                    $context,
+                    'payment_account_id',
+                );
+
+                $fresh->currency_id = $context->currency?->getKey();
+                $fresh->exchange_rate = $context->rateToPersist();
             }
 
             $fresh->save();

@@ -31,11 +31,42 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
     'normal_balance',
     'description',
     'parent_id',
+    'currency_id',
 ])]
 class Account extends Model
 {
     /** @use HasFactory<AccountFactory> */
     use HasFactory;
+
+    /*
+    |--------------------------------------------------------------------------
+    | currency_id - an optional RESTRICTION, not a requirement
+    |--------------------------------------------------------------------------
+    |
+    | The ledger is denominated in the company's base currency. `debit` and
+    | `credit` on journal_lines are base amounts without exception, which is what
+    | lets one set of amount columns serve the whole system. This column does not
+    | change that - it states what this particular account HOLDS, so that a
+    | mismatch can be refused before it becomes a misstatement.
+    |
+    | null - no opinion, the default for every account, and correct for revenue,
+    |   expense and equity, which legitimately aggregate across currencies.
+    | set  - this account holds money in this currency. A USD bank account must not
+    |   be credited with a EUR receipt: the balance would become a EUR number
+    |   wearing a USD label, and nothing downstream could detect it.
+    |
+    | Defaulting every account to the company base currency was rejected: it would
+    | make every bank account silently reject every foreign receipt, including the
+    | legitimate ones, and the failure would read as a puzzling validation error on
+    | correct data.
+    |
+    | Parent and summary accounts must be left null - they roll up children of mixed
+    | currencies, and restricting them would be meaningless.
+    |
+    | Fillable but not client-settable on an arbitrary account update: AccountCurrencyGuard
+    | has to run, because the restriction has to agree with the company's base
+    | currency and with the account's own type.
+    */
 
     /**
      * `is_active` and `is_system` are absent on purpose.
@@ -61,12 +92,71 @@ class Account extends Model
             'normal_balance' => NormalBalance::class,
             'is_active' => 'boolean',
             'is_system' => 'boolean',
+            'currency_id' => 'integer',
         ];
     }
 
     public function company(): BelongsTo
     {
         return $this->belongsTo(Company::class);
+    }
+
+    /**
+     * The currency this account holds, or null for no restriction.
+     */
+    public function currency(): BelongsTo
+    {
+        return $this->belongsTo(Currency::class, 'currency_id');
+    }
+
+    public function hasCurrencyRestriction(): bool
+    {
+        return $this->currency_id !== null;
+    }
+
+    /**
+     * May a document in this currency post against this account?
+     *
+     * The permissive default is the whole point: an account with no declared
+     * currency accepts anything, so an existing chart of accounts needs no changes
+     * to become multi-currency-capable. An account that does declare one must match
+     * exactly - "close enough" would defeat the purpose of declaring it.
+     *
+     * @param  int|null  $currencyId  the transaction currency, or null for base
+     */
+    public function acceptsCurrency(?int $currencyId): bool
+    {
+        if ($this->currency_id === null) {
+            return true;
+        }
+
+        return $this->currency_id === $currencyId;
+    }
+
+    /**
+     * Which account types may carry a currency restriction.
+     *
+     * Only the balances that can actually hold foreign money. A revenue account
+     * denominated in USD would be meaningless - a company earns in whatever it
+     * invoices in and the amount is already in base currency by the time it
+     * reaches the ledger - and permitting it would let someone create an account
+     * whose every posting is then questionable.
+     *
+     * Expense accounts are included because foreign-currency purchases are real,
+     * and because a foreign-currency expense line posts to an expense account
+     * regardless of how the expense was paid.
+     *
+     * EQUITY is deliberately excluded: FX gain and loss are income and expense
+     * consequences, and a restricted equity account would be the same category
+     * error.
+     */
+    public function accountTypeAllowsCurrencyRestriction(): bool
+    {
+        return in_array($this->account_type, [
+            AccountType::Asset,
+            AccountType::Liability,
+            AccountType::Expense,
+        ], true);
     }
 
     public function parent(): BelongsTo

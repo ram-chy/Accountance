@@ -32,7 +32,7 @@ class PayablesReportService
         $bills = PurchaseBill::query()
             ->where('company_id', $company->getKey())
             ->withOutstandingBalance()
-            ->with('supplier')
+            ->with(['supplier', 'currency'])
             ->when($supplierId, fn ($query) => $query->where('supplier_id', $supplierId))
             ->whereDate('bill_date', '<=', $asOf->toDateString())
             ->orderBy('due_date')
@@ -55,7 +55,14 @@ class PayablesReportService
             $totalPaid = $totalPaid->plus($paid);
             $totalDue = $totalDue->plus($due);
 
-            $rows[] = [
+            /*
+             * Phase 14 §21: the amounts on a row are in the bill's own currency.
+             * For a foreign bill that is not the base currency, so the row says
+             * which currency it is and what one unit of it was worth, and the base
+             * grand total (stored at posting, never recomputed) lets the balance be
+             * read alongside the ledger without re-converting it today.
+             */
+            $row = [
                 'bill_id' => $bill->getKey(),
                 'bill_number' => $bill->bill_number,
                 'bill_date' => $bill->bill_date?->toDateString(),
@@ -70,10 +77,19 @@ class PayablesReportService
                 'balance_due' => $due->toDatabase(),
                 'days_past_due' => $this->daysPastDue($bill->due_date, $asOf),
             ];
+
+            if ($bill->isForeignCurrency()) {
+                $row['currency_code'] = $bill->currency?->code;
+                $row['exchange_rate'] = $bill->exchange_rate;
+                $row['base_grand_total'] = $bill->baseGrandTotal()->toDatabase();
+            }
+
+            $rows[] = $row;
         }
 
         return [
             'as_of' => $asOf->toDateString(),
+            'base_currency' => $this->baseCurrency($company),
             'rows' => $rows,
             'count' => count($rows),
             'totals' => [
@@ -81,6 +97,25 @@ class PayablesReportService
                 'paid_total' => $totalPaid->toDatabase(),
                 'balance_due' => $totalDue->toDatabase(),
             ],
+        ];
+    }
+
+    /**
+     * The company base currency for the disclosure block (Phase 14 §21.1).
+     *
+     * The mirror of ReceivablesReportService::baseCurrency().
+     *
+     * @return array{code: string|null, name: string|null, symbol: string|null, decimals: int|null}
+     */
+    private function baseCurrency(Company $company): array
+    {
+        $currency = $company->currency;
+
+        return [
+            'code' => $currency?->code,
+            'name' => $currency?->name,
+            'symbol' => $currency?->symbol,
+            'decimals' => $currency?->decimal_precision,
         ];
     }
 }

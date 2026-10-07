@@ -69,7 +69,7 @@ class JournalController extends Controller
                     ->orWhere('reference', 'like', $term)
                     ->orWhere('journal_number', 'like', $term));
             })
-            ->with('lines.account')
+            ->with('lines.account', 'lines.currency')
             ->orderByDesc('journal_date')
             ->orderByDesc('id')
             ->paginate($request->integer('per_page', 25))
@@ -93,7 +93,7 @@ class JournalController extends Controller
 
         return ApiResponse::success(
             message: 'Journal created successfully.',
-            data: new JournalResource($journal->load('lines.account')),
+            data: new JournalResource($journal->load('lines.account', 'lines.currency')),
             status: 201,
         );
     }
@@ -104,7 +104,7 @@ class JournalController extends Controller
 
         return ApiResponse::success(
             message: 'Journal retrieved successfully.',
-            data: new JournalResource($journal->load('lines.account')),
+            data: new JournalResource($journal->load('lines.account', 'lines.currency')),
         );
     }
 
@@ -116,7 +116,7 @@ class JournalController extends Controller
 
         return ApiResponse::success(
             message: 'Journal updated successfully.',
-            data: new JournalResource($updated->load('lines.account')),
+            data: new JournalResource($updated->load('lines.account', 'lines.currency')),
         );
     }
 
@@ -158,7 +158,7 @@ class JournalController extends Controller
 
         return ApiResponse::success(
             message: 'Journal posted successfully.',
-            data: new JournalResource($posted->load('lines.account')),
+            data: new JournalResource($posted->load('lines.account', 'lines.currency')),
         );
     }
 }

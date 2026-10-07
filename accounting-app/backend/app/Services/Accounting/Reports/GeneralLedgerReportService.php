@@ -66,7 +66,11 @@ class GeneralLedgerReportService extends JournalReportService
 
             $sourceType = $row->source_type ?? 'MANUAL';
 
-            $lines[] = [
+            $isForeign = $row->currency_id !== null;
+            $foreignDebit = $row->foreign_debit;
+            $foreignCredit = $row->foreign_credit;
+
+            $line = [
                 'journal_id' => (int) $row->journal_id,
                 'journal_line_id' => (int) $row->journal_line_id,
                 'journal_number' => $row->journal_number,
@@ -79,6 +83,22 @@ class GeneralLedgerReportService extends JournalReportService
                 'credit' => $this->amount($credit),
                 'running_balance' => $this->amount($running),
             ];
+
+            /*
+             * FX provenance. Present for every row so the shape is stable, null
+             * for a base-currency line: a client that has to guess whether a
+             * field exists will guess wrong on the first foreign row it sees.
+             */
+            $line['currency_id'] = $isForeign ? (int) $row->currency_id : null;
+            $line['exchange_rate'] = $row->exchange_rate;
+            $line['foreign_debit'] = $isForeign && $foreignDebit !== null
+                ? Money::of((string) $foreignDebit)->toDatabase()
+                : null;
+            $line['foreign_credit'] = $isForeign && $foreignCredit !== null
+                ? Money::of((string) $foreignCredit)->toDatabase()
+                : null;
+
+            $lines[] = $line;
         }
 
         $closing = $opening->plus($periodDebit)->minus($periodCredit);
@@ -94,6 +114,12 @@ class GeneralLedgerReportService extends JournalReportService
                 'is_active' => $account->is_active,
             ],
             'period' => $this->period($from, $to),
+            /*
+             * Base-currency disclosure (§21.1). Every balance above is in this
+             * currency; the foreign_* columns on each row are provenance only and
+             * never feed a total.
+             */
+            'base_currency' => $this->baseCurrency($company),
             'opening_balance' => $this->amount($opening),
             'rows' => $lines,
             'period_debits' => $this->amount($periodDebit),
@@ -157,6 +183,10 @@ class GeneralLedgerReportService extends JournalReportService
                 'journal_lines.description as line_description',
                 'journal_lines.debit',
                 'journal_lines.credit',
+                'journal_lines.currency_id',
+                'journal_lines.foreign_debit',
+                'journal_lines.foreign_credit',
+                'journal_lines.exchange_rate',
             ])
             ->get();
     }

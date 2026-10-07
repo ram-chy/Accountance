@@ -9,7 +9,6 @@ use App\Models\Customer;
 use App\Models\CustomerReceipt;
 use App\Models\SalesInvoice;
 use App\Models\Supplier;
-use App\Support\Money;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 
@@ -44,7 +43,10 @@ class CustomerStatementReportService extends CounterpartyStatementReportService
                 'type' => 'invoice',
                 'reference' => $invoice->invoice_number,
                 'description' => $invoice->notes,
-                'amount' => Money::of($invoice->grand_total),
+                'amount' => $invoice->baseGrandTotal(),
+                'currency_code' => $invoice->currency_id ? $invoice->currency?->code : $company->currency?->code,
+                'exchange_rate' => $invoice->exchange_rate,
+                'foreign_amount' => $invoice->isForeignCurrency() ? $invoice->grandTotalAmount()->toDatabase() : null,
             ]);
     }
 
@@ -64,7 +66,10 @@ class CustomerStatementReportService extends CounterpartyStatementReportService
                 'type' => 'receipt',
                 'reference' => $receipt->receipt_number,
                 'description' => $receipt->reference ?? $receipt->notes,
-                'amount' => Money::of($receipt->amount),
+                'amount' => $receipt->baseAmount(),
+                'currency_code' => $receipt->currency_id ? $receipt->currency?->code : $company->currency?->code,
+                'exchange_rate' => $receipt->exchange_rate,
+                'foreign_amount' => $receipt->isForeignCurrency() ? $receipt->amountMoney()->toDatabase() : null,
             ]);
     }
 

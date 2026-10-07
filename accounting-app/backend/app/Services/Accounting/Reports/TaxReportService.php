@@ -9,6 +9,7 @@ use App\Models\PurchaseBillLine;
 use App\Models\SalesInvoiceLine;
 use App\Models\Tax;
 use App\Support\Money;
+use App\Support\Rate;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 
@@ -120,11 +121,15 @@ class TaxReportService
         $outputCollected = Money::zero();
         $inputRecovered = Money::zero();
         $unattributed = Money::zero();
+        $salesTaxable = Money::zero();
+        $purchaseTaxable = Money::zero();
 
         foreach ($rows as $row) {
             $outputCollected = $outputCollected->plus($row['output_tax']);
             $inputRecovered = $inputRecovered->plus($row['input_tax']);
             $unattributed = $unattributed->plus($row['unattributed_tax']);
+            $salesTaxable = $salesTaxable->plus($row['sales_taxable']);
+            $purchaseTaxable = $purchaseTaxable->plus($row['purchase_taxable']);
         }
 
         return [
@@ -132,9 +137,12 @@ class TaxReportService
                 'from' => $from?->toDateString(),
                 'to' => $to?->toDateString(),
             ],
+            'base_currency' => $this->baseCurrency($company),
             'rows' => $rows->map(fn (array $row) => $this->renderRow($row))->values()->all(),
             'totals' => [
+                'sales_taxable' => $salesTaxable->toDatabase(),
                 'output_tax' => $outputCollected->toDatabase(),
+                'purchase_taxable' => $purchaseTaxable->toDatabase(),
                 'input_tax' => $inputRecovered->toDatabase(),
                 'net_tax' => $outputCollected->minus($inputRecovered)->toDatabase(),
                 'unattributed_tax' => $unattributed->toDatabase(),
@@ -143,14 +151,13 @@ class TaxReportService
     }
 
     /**
-     * Accumulate every posted line's figures, keyed by tax.
+     * The same figures, one row per tax.
      *
-     * Keyed by tax_id with null as its own key, which is what keeps unattributed
-     * amounts in the totals instead of quietly dropping them. One query per
-     * document type rather than per tax: a company with thirty taxes and a thousand
-     * documents should not issue a thousand queries to produce thirty rows.
-     *
-     * @return Collection<int|string, array<string, Money|int|null>>
+     * @return array{
+     *     period: array{from: string|null, to: string|null},
+     *     rows: array<int, array<string, mixed>>,
+     *     totals: array<string, mixed>
+     * }
      */
     private function aggregate(Company $company, ?Carbon $from, ?Carbon $to): Collection
     {
@@ -167,12 +174,22 @@ class TaxReportService
              * actually charged and the difference is the discount and any other
              * adjustment already applied. Deriving the base from the stored total
              * is what makes the report's base agree with the document's own figures.
+             *
+             * Both legs are converted at the document's STORED snapshot rate (Phase
+             * 14 §21.3): the ledger is a base-currency record, so a multi-currency
+             * period can only be totalled in one currency, and that one currency is
+             * the company's own. A base-currency document has no stored rate, so the
+             * figures pass through untouched.
              */
-            $taxable = Money::of($line->line_total)->minus(Money::of($line->tax_amount));
+            $tax = $line->baseTaxAmount();
+            $taxable = $this->toSnapshotBase(
+                Money::of($line->line_total)->minus(Money::of($line->tax_amount)),
+                $line->document_rate,
+            );
 
             if ($line->tax_id === null) {
-                $rows[$key]['unattributed_tax'] = $rows[$key]['unattributed_tax']->plus(Money::of($line->tax_amount));
-                $rows[$key]['output_tax'] = $rows[$key]['output_tax']->plus(Money::of($line->tax_amount));
+                $rows[$key]['unattributed_tax'] = $rows[$key]['unattributed_tax']->plus($tax);
+                $rows[$key]['output_tax'] = $rows[$key]['output_tax']->plus($tax);
 
                 /*
                  * The base is reported even with no tax named, so a reader can still
@@ -186,7 +203,7 @@ class TaxReportService
             }
 
             $rows[$key]['sales_taxable'] = $rows[$key]['sales_taxable']->plus($taxable);
-            $rows[$key]['output_tax'] = $rows[$key]['output_tax']->plus(Money::of($line->tax_amount));
+            $rows[$key]['output_tax'] = $rows[$key]['output_tax']->plus($tax);
         }
 
         /*
@@ -220,18 +237,22 @@ class TaxReportService
 
             $rows[$key] ??= $this->emptyRow($line->tax_id);
 
-            $taxable = Money::of($line->line_total)->minus(Money::of($line->tax_amount));
+            $tax = $line->baseTaxAmount();
+            $taxable = $this->toSnapshotBase(
+                Money::of($line->line_total)->minus(Money::of($line->tax_amount)),
+                $line->document_rate,
+            );
 
             if ($line->tax_id === null) {
-                $rows[$key]['unattributed_tax'] = $rows[$key]['unattributed_tax']->plus(Money::of($line->tax_amount));
-                $rows[$key]['input_tax'] = $rows[$key]['input_tax']->plus(Money::of($line->tax_amount));
+                $rows[$key]['unattributed_tax'] = $rows[$key]['unattributed_tax']->plus($tax);
+                $rows[$key]['input_tax'] = $rows[$key]['input_tax']->plus($tax);
                 $rows[$key]['purchase_taxable'] = $rows[$key]['purchase_taxable']->plus($taxable);
 
                 continue;
             }
 
             $rows[$key]['purchase_taxable'] = $rows[$key]['purchase_taxable']->plus($taxable);
-            $rows[$key]['input_tax'] = $rows[$key]['input_tax']->plus(Money::of($line->tax_amount));
+            $rows[$key]['input_tax'] = $rows[$key]['input_tax']->plus($tax);
         }
 
         return $this->withTaxIdentity($rows);
@@ -244,6 +265,7 @@ class TaxReportService
     {
         return SalesInvoiceLine::query()
             ->select('sales_invoice_lines.*')
+            ->addSelect('sales_invoices.exchange_rate as document_rate')
             ->join('sales_invoices', 'sales_invoices.id', '=', 'sales_invoice_lines.sales_invoice_id')
             ->where('sales_invoices.company_id', $company->getKey())
             ->where('sales_invoices.status', TransactionStatus::Posted)
@@ -259,6 +281,7 @@ class TaxReportService
     {
         return PurchaseBillLine::query()
             ->select('purchase_bill_lines.*')
+            ->addSelect('purchase_bills.exchange_rate as document_rate')
             ->join('purchase_bills', 'purchase_bills.id', '=', 'purchase_bill_lines.purchase_bill_id')
             ->where('purchase_bills.company_id', $company->getKey())
             ->where('purchase_bills.status', TransactionStatus::Posted)
@@ -286,6 +309,7 @@ class TaxReportService
     {
         return CreditDebitNoteLine::query()
             ->select('credit_debit_note_lines.*')
+            ->addSelect('credit_debit_notes.exchange_rate as document_rate')
             ->with('note')
             ->join('credit_debit_notes', 'credit_debit_notes.id', '=', 'credit_debit_note_lines.credit_debit_note_id')
             ->where('credit_debit_notes.company_id', $company->getKey())
@@ -308,6 +332,8 @@ class TaxReportService
      *    so the line alone cannot say which it is.
      *  - WHICH BASE. line_total less tax_amount, for exactly the same reason as on
      *    an invoice: the base must be what was actually charged, net of discount.
+     *    Both figures are the note's own snapshot, so they convert - see
+     *    toSnapshotBase() - exactly as the invoice loops convert theirs.
      *
      * The row is passed by reference because this is an accumulator over many lines
      * and returning a new array per line would mean copying the whole table once
@@ -328,8 +354,11 @@ class TaxReportService
 
         $sales = $note->note_type->isSales();
 
-        $tax = Money::of($line->tax_amount);
-        $taxable = Money::of($line->line_total)->minus($tax);
+        $tax = $line->baseTaxAmount();
+        $taxable = $this->toSnapshotBase(
+            Money::of($line->line_total)->minus(Money::of($line->tax_amount)),
+            $line->document_rate,
+        );
 
         /*
          * Unattributed tax is accumulated separately from the side's own tax
@@ -413,6 +442,45 @@ class TaxReportService
         }
 
         return collect($rows);
+    }
+
+    /**
+     * The base-currency disclosure block (Phase 14 §21.1).
+     *
+     * The tax totals are denominated in this currency. A tax figure is a money
+     * fact and cannot be meaningfully combined across currencies - the whole
+     * reason base_tax_amount is stored rather than derived - so a client that
+     * knows which currency the totals are in cannot silently add a foreign row to
+     * a base one. See JournalReportService::baseCurrency() for the shape.
+     *
+     * @return array{code: string|null, name: string|null, symbol: string|null, decimals: int|null}
+     */
+    private function baseCurrency(Company $company): array
+    {
+        $currency = $company->currency;
+
+        return [
+            'code' => $currency?->code,
+            'name' => $currency?->name,
+            'symbol' => $currency?->symbol,
+            'decimals' => $currency?->decimal_precision,
+        ];
+    }
+
+    /**
+     * Carry an amount to the company's base currency at the document's snapshot.
+     *
+     * The rate passed in is the document's STORED exchange_rate (Phase 14 §21.3),
+     * never today's. A base-currency document has no stored rate, and no amount is
+     * converted when there is none - the figure is already base. This is the same
+     * rule the settlement path uses, so a retired rate can never restate what a
+     * period of tax was worth.
+     */
+    private function toSnapshotBase(Money $amount, mixed $rate): Money
+    {
+        return $rate === null
+            ? $amount
+            : Rate::of($rate)->applyTo($amount);
     }
 
     /**

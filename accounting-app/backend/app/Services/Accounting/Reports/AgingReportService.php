@@ -33,7 +33,7 @@ abstract class AgingReportService
 
         $rows = $this->outstandingRows($company, $counterpartyId, $asOf);
 
-        return $this->bucketed($rows, $asOf);
+        return $this->bucketed($company, $rows, $asOf);
     }
 
     /**
@@ -49,10 +49,32 @@ abstract class AgingReportService
     abstract protected function counterpartyKey(): string;
 
     /**
+     * The company base currency for the disclosure block (Phase 14 §21.1).
+     *
+     * The aging buckets are sums of `balance_due` figures that are each in their
+     * own document's currency. The disclosure says what the report's currency
+     * meter is so a bucket that mixes one foreign row into a base total is
+     * visible as a mixed sum rather than mistaken for a ledger balance.
+     *
+     * @return array{code: string|null, name: string|null, symbol: string|null, decimals: int|null}
+     */
+    private function baseCurrency(Company $company): array
+    {
+        $currency = $company->currency;
+
+        return [
+            'code' => $currency?->code,
+            'name' => $currency?->name,
+            'symbol' => $currency?->symbol,
+            'decimals' => $currency?->decimal_precision,
+        ];
+    }
+
+    /**
      * @param  array<int, array<string, mixed>>  $rows
      * @return array<string, mixed>
      */
-    private function bucketed(array $rows, Carbon $asOf): array
+    private function bucketed(Company $company, array $rows, Carbon $asOf): array
     {
         $buckets = $this->agingBuckets();
         $keys = array_column($buckets, 'key');
@@ -90,6 +112,7 @@ abstract class AgingReportService
 
         return [
             'as_of' => $asOf->toDateString(),
+            'base_currency' => $this->baseCurrency($company),
             'buckets' => array_map(fn (array $bucket): array => [
                 'key' => $bucket['key'],
                 'label' => $bucket['label'],

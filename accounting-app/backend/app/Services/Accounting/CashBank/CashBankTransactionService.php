@@ -10,6 +10,8 @@ use App\Models\CashBankTransaction;
 use App\Models\Company;
 use App\Models\User;
 use App\Services\Accounting\AccountingPeriodService;
+use App\Services\Accounting\Currency\DocumentCurrencyService;
+use App\Services\Accounting\Currency\TransactionCurrency;
 use App\Services\Accounting\DocumentNumberSequence;
 use App\Services\Accounting\TransactionAccountResolver;
 use App\Support\Money;
@@ -55,6 +57,7 @@ class CashBankTransactionService
         private readonly DocumentNumberSequence $numbers,
         private readonly TransactionAccountResolver $accounts,
         private readonly AccountingPeriodService $periods,
+        private readonly DocumentCurrencyService $currencies,
     ) {}
 
     /**
@@ -77,7 +80,23 @@ class CashBankTransactionService
     ): CashBankTransaction {
         $accounts = $this->resolveAccounts($company, $type, $data);
 
-        return DB::transaction(function () use ($company, $actor, $type, $data, $accounts) {
+        /*
+         * Phase 14: the currency this movement is denominated in, and the rate it
+         * is priced at, snapshotted on the draft. Both legs of a cash/bank movement
+         * are the same money, so there is one currency and one rate for the whole
+         * transaction - see the migration for why a cross-currency transfer is
+         * refused rather than given a rate per leg.
+         *
+         * Resolved before the transaction opens rather than inside it, because a
+         * missing rate is a validation failure and nothing here needs rolling back
+         * if it turns out to be one.
+         */
+        $context = $this->resolveContext($company, $data);
+
+        $this->accounts->assertSameDenomination($accounts['source'], $accounts['destination'], $type);
+        $this->assertAccountsAcceptCurrency($accounts, $context);
+
+        return DB::transaction(function () use ($company, $actor, $type, $data, $accounts, $context) {
             $number = $this->numbers->nextFor($company, DocumentNumberType::CashBankTransaction);
 
             $transaction = new CashBankTransaction([
@@ -87,6 +106,8 @@ class CashBankTransactionService
                 'amount' => Money::ofTolerant($data['amount'])->toDatabase(),
                 'reference' => $data['reference'] ?? null,
                 'notes' => $data['notes'] ?? null,
+                'currency_id' => $context->currency?->getKey(),
+                'exchange_rate' => $context->rateToPersist(),
             ]);
 
             /*
@@ -153,6 +174,34 @@ class CashBankTransactionService
 
             $fresh->source_account_id = $accounts['source']->getKey();
             $fresh->destination_account_id = $accounts['destination']->getKey();
+
+            /*
+             * Phase 14: the accounts are re-checked against the currency this
+             * movement is now in, and re-priced if that currency or its date may
+             * have changed.
+             *
+             * Unconditional rather than conditional on currency_id or
+             * transaction_date being present, because the failure a partial edit
+             * produces is precisely one where neither was touched: swapping a USD
+             * bank for a EUR one leaves the currency alone and creates a pair that
+             * was never validated together. Gating the check on the currency having
+             * changed is the bug this avoids.
+             *
+             * Re-resolving when nothing relevant changed costs one query and writes
+             * back the same rate it already held, which is worth it for having one
+             * path instead of two - the "was it one of these two fields" question is
+             * exactly where the next partial edit would be missed.
+             */
+            $context = $this->resolveContext($company, [
+                'transaction_date' => $data['transaction_date'] ?? $fresh->transaction_date->toDateString(),
+                'currency_id' => array_key_exists('currency_id', $data) ? $data['currency_id'] : $fresh->currency_id,
+            ]);
+
+            $this->accounts->assertSameDenomination($accounts['source'], $accounts['destination'], $type);
+            $this->assertAccountsAcceptCurrency($accounts, $context);
+
+            $fresh->currency_id = $context->currency?->getKey();
+            $fresh->exchange_rate = $context->rateToPersist();
 
             /*
              * Phase 8: re-dating a draft may not target a closed period. See
@@ -252,6 +301,56 @@ class CashBankTransactionService
         ];
 
         return $resolved;
+    }
+
+    /**
+     * The currency context this movement will be priced in.
+     *
+     * A payload with no currency_id is base currency at an implicit rate of 1,
+     * which is exactly what every cash/bank movement looked like before Phase 14 -
+     * so a company that has never configured a base currency keeps working, and
+     * this method is a pass-through for them rather than a new requirement.
+     *
+     * @param  array<string, mixed>  $data
+     *
+     * @throws ValidationException
+     */
+    private function resolveContext(Company $company, array $data): TransactionCurrency
+    {
+        return $this->currencies->resolve(
+            $company,
+            $data['currency_id'] ?? null,
+            $data['transaction_date'],
+            'currency_id',
+        );
+    }
+
+    /**
+     * Both accounts have to be able to hold this currency.
+     *
+     * The cash/bank side is the obvious case: a EUR bank feed line credited into a
+     * USD-denominated account would make that account's balance a sum of two
+     * currencies with nothing recording which is which.
+     *
+     * The offset side is checked too, and for the same reason rather than a
+     * different one. Crediting a USD cash movement against an account that declares
+     * EUR is a cross-currency movement in all but name, and it is the one this
+     * phase does not support - see the migration header. Checking it here means the
+     * combination is refused where the user typed it, not at posting time.
+     *
+     * An account that declares no currency accepts anything, so no existing chart of
+     * accounts changes behaviour. A base-currency movement is not checked at all:
+     * DocumentCurrencyService::assertAccountAccepts returns early for it, since a
+     * base line makes no claim about what an account is denominated in.
+     *
+     * @param  array{source: Account, destination: Account}  $accounts
+     *
+     * @throws ValidationException
+     */
+    private function assertAccountsAcceptCurrency(array $accounts, TransactionCurrency $context): void
+    {
+        $this->currencies->assertAccountAccepts($accounts['source'], $context, 'source_account_id');
+        $this->currencies->assertAccountAccepts($accounts['destination'], $context, 'destination_account_id');
     }
 
     /**

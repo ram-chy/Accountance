@@ -238,6 +238,97 @@ final readonly class Money implements Stringable
     }
 
     /**
+     * Multiply two decimals at the stored scale and round the product half-up.
+     *
+     * Phase 14 needs this for currency conversion, and it is a distinct operation
+     * from times() because the two operands are not both Money:
+     *
+     *   - times() multiplies an amount by another amount that shares this class's
+     *     scale, so the intermediate can be trusted to scale x 2 places.
+     *   - an exchange rate is not an amount. It is stored at scale 10
+     *     (config('accounting.exchange_rate.scale')) precisely because four
+     *     places cannot represent a currency pair - IDR to USD is about 0.000062,
+     *     and 0.0001 would be a 61% error in the factor - so its product needs
+     *     scale + 10 working places, not scale x 2.
+     *
+     * Rounding happens exactly once, at the stored scale, half away from zero. That
+     * is the same rule times() and percentageOf() use, and keeping it identical is
+     * the point: the database CHECK on journal_lines compares
+     * round(foreign_amount * exchange_rate, 4) against the stored base amount, so
+     * the value produced here and the value the constraint verifies have to be the
+     * same number by construction.
+     *
+     * The working scale is taken as the sum of the two operands' scales rather than
+     * a fixed multiple, because that is what makes the intermediate exact: a
+     * product of an n-place and an m-place decimal is exactly an n+m place decimal,
+     * so nothing is truncated before the single rounding decision.
+     *
+     * @param  int|float|string  $left  a plain decimal, not parsed into Money
+     * @param  int|float|string  $right  a plain decimal, typically a rate
+     */
+    public static function product(int|float|string $left, int|float|string $right): self
+    {
+        $leftValue = self::decimalString($left);
+        $rightValue = self::decimalString($right);
+
+        $workingScale = self::scaleOf($leftValue) + self::scaleOf($rightValue);
+
+        $product = bcmul($leftValue, $rightValue, max($workingScale, self::scale()));
+
+        return new self(self::canonicalise(
+            self::roundHalfUp($product, self::scale())
+        ));
+    }
+
+    /**
+     * Normalise a boundary value to a plain decimal string without applying Money's
+     * own scale rules.
+     *
+     * product() accepts a rate, and a rate legitimately carries more decimal places
+     * than Money stores. Passing it through of() would reject it as over-precise,
+     * which is exactly backwards. This strips the human-readable punctuation of()
+     * also handles and leaves the digits alone.
+     */
+    private static function decimalString(int|float|string $value): string
+    {
+        if (is_float($value)) {
+            $value = number_format($value, 10, '.', '');
+        }
+
+        $value = trim((string) $value);
+
+        if ($value === '') {
+            return '0';
+        }
+
+        $value = str_replace([',', '_', ' '], '', $value);
+        $value = ltrim($value, '+');
+
+        if (str_contains($value, 'e') || str_contains($value, 'E')) {
+            $value = self::expandExponential($value);
+        }
+
+        if (! self::isWellFormed($value)) {
+            throw new InvalidArgumentException("Malformed decimal value [{$value}].");
+        }
+
+        return $value;
+    }
+
+    /**
+     * How many decimal places a plain decimal string carries.
+     *
+     * A value with no point has scale 0, so multiplying it needs no extra working
+     * places - "3" times a rate is a rate x 3, exact at the rate's own scale.
+     */
+    private static function scaleOf(string $value): int
+    {
+        $point = strpos($value, '.');
+
+        return $point === false ? 0 : strlen(substr($value, $point + 1));
+    }
+
+    /**
      * Apply a percentage rate to this amount, rounding half-up to the stored scale.
      *
      * The transaction tax mechanism needs this, and only this much of a tax

@@ -5,11 +5,16 @@ namespace App\Services\Accounting\CashBank;
 use App\Enums\JournalSource;
 use App\Enums\PaymentStatus;
 use App\Exceptions\ConflictException;
+use App\Models\Account;
 use App\Models\CashBankTransaction;
+use App\Models\Company;
 use App\Models\User;
+use App\Services\Accounting\Currency\DocumentCurrencyService;
+use App\Services\Accounting\Currency\TransactionCurrency;
 use App\Services\Accounting\JournalPostingService;
 use App\Services\Accounting\JournalService;
 use App\Services\Accounting\TransactionAccountResolver;
+use App\Support\Money;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
@@ -47,6 +52,14 @@ use Illuminate\Validation\ValidationException;
  * and posting it, the destination account may have been deactivated or had its
  * cash/bank classification removed, and posting would otherwise create a journal
  * referring to an account that is no longer eligible for the movement.
+ *
+ * Phase 14 adds a third re-validation: the accounts are re-checked against the
+ * currency they now have to hold, and the rate is re-resolved for the posting
+ * date rather than taken from the draft. A foreign movement produces two journal
+ * lines in the transaction currency at one rate, and JournalService derives the
+ * base side - which is why the entry still balances to the penny. A movement in
+ * base currency produces exactly the two lines it always did, with every FX column
+ * NULL, so nothing about the single-currency case changes.
  */
 class CashBankPostingService
 {
@@ -54,6 +67,7 @@ class CashBankPostingService
         private readonly JournalService $journals,
         private readonly JournalPostingService $posting,
         private readonly TransactionAccountResolver $accounts,
+        private readonly DocumentCurrencyService $currencies,
     ) {}
 
     /**
@@ -160,6 +174,24 @@ class CashBankPostingService
                 ]);
             }
 
+            $this->accounts->assertSameDenomination($source, $destination, $type);
+
+            /*
+             * The rate in force on the day the money moves, resolved HERE for the
+             * same reason the receipt posting service resolves its own: the draft's
+             * rate is a preview of a rate table that is still editable, and this is
+             * the last moment the movement can be priced.
+             */
+            $context = $this->currencies->resolve(
+                $fresh->company,
+                $fresh->currency_id,
+                $fresh->transaction_date->toDateString(),
+                'currency_id',
+            );
+
+            $this->currencies->assertAccountAccepts($source, $context, 'source_account_id');
+            $this->currencies->assertAccountAccepts($destination, $context, 'destination_account_id');
+
             $amount = $fresh->amountMoney();
             $number = $fresh->transaction_number;
             $description = $this->describe($fresh, $source->code, $destination->code);
@@ -173,35 +205,67 @@ class CashBankPostingService
                     'reference' => $fresh->reference ?: $number,
                     'source_type' => JournalSource::CashBankTransaction->value,
                     'source_id' => $fresh->getKey(),
-                    'lines' => [
-                        [
-                            'account_id' => $destination->getKey(),
-                            'description' => $description,
-                            'debit' => $amount->toDatabase(),
-                            'credit' => '0',
-                        ],
-                        [
-                            'account_id' => $source->getKey(),
-                            'description' => $description,
-                            'debit' => '0',
-                            'credit' => $amount->toDatabase(),
-                        ],
-                    ],
+                    'lines' => $this->lines($context, $destination, $source, $amount, $description),
                 ],
             );
 
             // The only thing in the application permitted to set status = POSTED.
             $this->posting->post($journal, $actor, 'transaction_date');
 
+            /*
+             * base_amount is the figure the ledger booked, read back out of the
+             * journal rather than converted a second time here. Both legs carry the
+             * same converted amount - the entry is Dr destination / Cr source at one
+             * rate - so the destination leg is as good a source as any.
+             */
+            $booked = $this->currencies->baseAmountBooked(
+                $journal->lines,
+                $destination->getKey(),
+            );
+
             $fresh->forceFill([
                 'status' => PaymentStatus::Posted->value,
                 'journal_id' => $journal->getKey(),
+                'base_amount' => ($booked ?? $amount)->toDatabase(),
+                'exchange_rate' => $context->rateToPersist(),
                 'posted_by' => $actor->getKey(),
                 'posted_at' => now(),
             ])->save();
 
             return $fresh->refresh();
         });
+    }
+
+    /**
+     * The two journal lines: destination debited, source credited, same money.
+     *
+     * There is no third line here, and that is worth being explicit about.
+     * Cash/bank is the one place in this application where foreign currency moves
+     * *between* accounts of the same currency rather than being converted, so there
+     * is no difference to book: a transfer of 1,000 EUR at 16,000 is 16,000,000 on
+     * both sides. The realized FX that appears when foreign money is converted - a
+     * receipt against a foreign invoice, a payment against a foreign bill - has no
+     * analogue here, and manufacturing one would post an FX gain the company did
+     * not have.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    private function lines(
+        TransactionCurrency $context,
+        Account $destination,
+        Account $source,
+        Money $amount,
+        string $description,
+    ): array {
+        $build = $context->isForeign()
+            ? fn (Account $account, bool $isDebit) => $this->currencies->journalLine(
+                $context, $account->getKey(), $description, $amount, $isDebit
+            )
+            : fn (Account $account, bool $isDebit) => $this->currencies->baseJournalLine(
+                $account->getKey(), $description, $amount, $isDebit
+            );
+
+        return [$build($destination, true), $build($source, false)];
     }
 
     /**

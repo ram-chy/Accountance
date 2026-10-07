@@ -106,6 +106,18 @@ return [
         'accounting.fixed_asset.capitalize',
         'accounting.fixed_asset.depreciate',
         'accounting.fixed_asset.dispose',
+
+        // Phase 14
+        'accounting.currency.view',
+        'accounting.currency.create',
+        'accounting.currency.update',
+        'accounting.currency.activate',
+        'accounting.currency.deactivate',
+        'accounting.exchange_rate.view',
+        'accounting.exchange_rate.create',
+        'accounting.exchange_rate.update',
+        'accounting.fx.update',
+        'accounting.controls.view',
     ],
 
     'roles' => [
@@ -205,6 +217,25 @@ return [
             'accounting.fixed_asset.capitalize',
             'accounting.fixed_asset.depreciate',
             'accounting.fixed_asset.dispose',
+
+            /*
+            | Phase 14. The Accountant owns everything company-scoped about
+            | foreign exchange - reading currencies, maintaining the company's
+            | rates, configuring the realised FX accounts, and reading the
+            | integrity controls - because those are the same acts as posting
+            | journals and settling balances, which this role already performs.
+            |
+            | It does NOT get accounting.currency.create/update/activate/
+            | deactivate. A currency is global reference data shared by every
+            | tenant; adding one changes what every company may invoice in. That
+            | is system configuration, not bookkeeping, so it stays with Admin.
+            */
+            'accounting.currency.view',
+            'accounting.exchange_rate.view',
+            'accounting.exchange_rate.create',
+            'accounting.exchange_rate.update',
+            'accounting.fx.update',
+            'accounting.controls.view',
         ],
 
         /*
@@ -277,6 +308,17 @@ return [
             | permissions into one.
             */
             'accounting.fixed_asset.view',
+
+            /*
+            | Phase 14, read-only. Manager sees the currency list, the rates that
+            | drive conversions and the integrity controls, because those are
+            | reads over the same accounting truth it already reads through the
+            | reports. It may not change a rate, configure FX accounts, or touch
+            | global currency master data: those are configuration decisions.
+            */
+            'accounting.currency.view',
+            'accounting.exchange_rate.view',
+            'accounting.controls.view',
         ],
 
         /*
@@ -304,6 +346,11 @@ return [
         | they are components of the company's reported profit, which Staff cannot
         | read a report to learn. Granting `view` here would disclose both, through
         | a register whose entire content is financial position.
+        |
+        | Phase 14 adds nothing. Exchange rates and the integrity controls are
+        | reads over the company's foreign-currency positions, which are
+        | components of the same accounting truth Staff is already denied, and
+        | currency master data is system configuration.
         */
         'Staff' => [
             'companies.view',

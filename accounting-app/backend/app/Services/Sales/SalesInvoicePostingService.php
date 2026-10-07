@@ -6,9 +6,12 @@ use App\Enums\JournalSource;
 use App\Enums\TransactionStatus;
 use App\Exceptions\ConflictException;
 use App\Models\Account;
+use App\Models\JournalLine;
 use App\Models\SalesInvoice;
 use App\Models\SalesInvoiceLine;
 use App\Models\User;
+use App\Services\Accounting\Currency\DocumentCurrencyService;
+use App\Services\Accounting\Currency\TransactionCurrency;
 use App\Services\Accounting\JournalPostingService;
 use App\Services\Accounting\JournalService;
 use App\Services\Accounting\TransactionAccountResolver;
@@ -52,6 +55,7 @@ class SalesInvoicePostingService
         private readonly JournalService $journals,
         private readonly JournalPostingService $posting,
         private readonly TransactionAccountResolver $accounts,
+        private readonly DocumentCurrencyService $currencies,
     ) {}
 
     /**
@@ -157,6 +161,29 @@ class SalesInvoicePostingService
              */
             $taxAccount = $this->resolveTaxAccount($fresh, $totals['tax_total']);
 
+            /*
+             * 5b. The currency context, resolved here rather than read off the draft.
+             *
+             * The draft carries a rate snapshot so the invoice can be read in both
+             * currencies while it is still being edited, and that snapshot is a
+             * preview: the rate table is mutable history, and a rate row may have been
+             * corrected, added or deactivated since the draft was typed. A draft is
+             * not an accounting fact, so nothing is preserved by honouring the rate it
+             * happened to be typed with - and this is the last moment the document can
+             * be priced, because after the journal is posted the rate is frozen for
+             * good.
+             *
+             * The one rate resolved here is written to the document header, to the
+             * document lines and to every journal line in the same operation, so there
+             * is a single price on the whole entry.
+             */
+            $transaction = $this->currencies->resolve(
+                $fresh->company,
+                $fresh->currency_id,
+                $fresh->invoice_date->toDateString(),
+                'currency_id',
+            );
+
             // 6 & 7. Create the draft journal and its lines.
             $journal = $this->journals->createDraft(
                 $fresh->company,
@@ -175,12 +202,38 @@ class SalesInvoicePostingService
                      * document from the ledger side.
                      */
                     'source_id' => $fresh->getKey(),
-                    'lines' => $this->journalLines($receivable, $revenueByAccount, $taxAccount, $grandTotal, $totals['tax_total']),
+                    'lines' => $this->journalLines(
+                        $transaction,
+                        $receivable,
+                        $revenueByAccount,
+                        $taxAccount,
+                        $grandTotal,
+                        Money::of($totals['tax_total'])
+                    ),
                 ],
             );
 
             // 8. Post through the single existing writer.
             $this->posting->post($journal, $actor, 'invoice_date');
+
+            /*
+             * The document's base figures, read back out of the journal rather than
+             * converted a second time. See DocumentCurrencyService::baseAmountBooked
+             * for why the ledger is the authority on what this invoice was worth.
+             *
+             * Written for a base-currency invoice too, because NULL on
+             * base_grand_total means "not posted yet" and nothing else - a posted
+             * invoice in IDR has a base grand total, and it is its own grand total.
+             */
+            $booked = $journal->lines()->get();
+
+            $baseGrandTotal = $this->currencies->baseAmountBooked($booked, (int) $receivable->getKey());
+
+            $baseTaxTotal = $taxAccount === null
+                ? Money::zero()
+                : $this->currencies->baseAmountBooked($booked, (int) $taxAccount->getKey());
+
+            $this->writeBaseTaxAmounts($fresh, $transaction, $booked, $taxAccount);
 
             /*
              * 9 & 10. The link and the status, in one statement so there is no
@@ -198,6 +251,10 @@ class SalesInvoicePostingService
                 'discount_total' => $totals['discount_total'],
                 'tax_total' => $totals['tax_total'],
                 'grand_total' => $totals['grand_total'],
+                'currency_id' => $transaction->currency?->getKey(),
+                'exchange_rate' => $transaction->rateToPersist(),
+                'base_grand_total' => $baseGrandTotal?->toDatabase(),
+                'base_tax_total' => $baseTaxTotal->toDatabase(),
             ])->save();
 
             return $fresh->refresh();
@@ -275,44 +332,131 @@ class SalesInvoicePostingService
      * Built as a description rather than written directly, and the same builder
      * feeds a GET /preview so a user can see the entry before committing to it.
      *
+     * Every line is emitted in the DOCUMENT's currency and carries no base amount.
+     * The base figures are derived by JournalService from the rate of the journal's
+     * own date - which is the invoice date - and that is deliberate: a posting
+     * service that converted its own amounts would be a second implementation of
+     * the conversion, free to drift from the first one, and the balance of a posted
+     * invoice would then depend on which of two rounding paths happened to run.
+     *
+     * The amounts are grouped by account in the FOREIGN currency before conversion,
+     * not after. Converting two revenue lines and adding the results can differ from
+     * adding the two amounts and converting once, and the second is what a reader
+     * checking the arithmetic by hand would do.
+     *
      * @param  array<int, Money>  $revenueByAccount
      * @return array<int, array<string, mixed>>
      */
     private function journalLines(
+        TransactionCurrency $transaction,
         Account $receivable,
         array $revenueByAccount,
         ?Account $taxAccount,
         Money $grandTotal,
-        string $taxTotal
+        Money $taxTotal
     ): array {
         $lines = [];
 
-        $lines[] = [
-            'account_id' => $receivable->getKey(),
-            'description' => 'Accounts Receivable',
-            'debit' => $grandTotal->toDatabase(),
-            'credit' => '0',
-        ];
+        $lines[] = $this->currencies->journalLine(
+            $transaction,
+            (int) $receivable->getKey(),
+            'Accounts Receivable',
+            $grandTotal,
+            true
+        );
 
         foreach ($revenueByAccount as $accountId => $amount) {
-            $lines[] = [
-                'account_id' => $accountId,
-                'description' => 'Sales revenue',
-                'debit' => '0',
-                'credit' => $amount->toDatabase(),
-            ];
+            $lines[] = $this->currencies->journalLine(
+                $transaction,
+                (int) $accountId,
+                'Sales revenue',
+                $amount,
+                false
+            );
         }
 
-        if ($taxAccount !== null && Money::of($taxTotal)->isPositive()) {
-            $lines[] = [
-                'account_id' => $taxAccount->getKey(),
-                'description' => 'Tax payable',
-                'debit' => '0',
-                'credit' => $taxTotal,
-            ];
+        if ($taxAccount !== null && $taxTotal->isPositive()) {
+            $lines[] = $this->currencies->journalLine(
+                $transaction,
+                (int) $taxAccount->getKey(),
+                'Tax payable',
+                $taxTotal,
+                false
+            );
         }
 
         return $lines;
+    }
+
+    /**
+     * Record each document line's tax in base currency, from the posted journal.
+     *
+     * WHY THE PARTS ARE DISTRIBUTED RATHER THAN CONVERTED
+     *
+     * The obvious implementation - convert each line's own tax at the document rate
+     * - cannot be used, and the reason is the schema. A journal line holds ONE
+     * foreign amount and ONE rate, and the database requires the base amount to be
+     * exactly that foreign amount times that rate. So the tax credit on the journal
+     * is a single conversion of the document's tax total, and the per-line figures
+     * that add up to it cannot each be their own conversion without occasionally
+     * disagreeing with the whole by a unit in the last place.
+     *
+     * They are therefore distributed: every line but the last is converted at the
+     * document rate - the figure a reader checking the arithmetic by hand would
+     * arrive at - and the last taxable line takes whatever remains of the amount the
+     * ledger actually booked. That is a deliberate, stated rounding rule rather than
+     * a drift nobody chose: the parts sum to exactly the tax credit in the journal,
+     * so base_tax_total is a true sum rather than a figure that happens to be close,
+     * and a tax report can total the column without disagreeing with the ledger.
+     *
+     * Lines carrying no tax get NULL rather than zero, which is the meaning the
+     * migration gives that value and which keeps "untaxed" distinguishable from
+     * "taxed at a rate that rounded to nothing".
+     *
+     * @param  Collection<int, JournalLine>  $booked
+     */
+    private function writeBaseTaxAmounts(
+        SalesInvoice $invoice,
+        TransactionCurrency $transaction,
+        Collection $booked,
+        ?Account $taxAccount
+    ): void {
+        $bookedTax = $taxAccount === null
+            ? null
+            : $this->currencies->baseAmountBooked($booked, (int) $taxAccount->getKey());
+
+        if ($bookedTax === null) {
+            return;
+        }
+
+        $taxable = $invoice->lines()
+            ->where('tax_amount', '>', 0)
+            ->orderBy('line_number')
+            ->get();
+
+        if ($taxable->isEmpty()) {
+            return;
+        }
+
+        $remaining = $bookedTax;
+        $lastIndex = $taxable->count() - 1;
+
+        foreach ($taxable as $position => $line) {
+            $share = $position === $lastIndex
+                ? $remaining
+                : $this->currencies->toBase(Money::of($line->tax_amount), $transaction);
+
+            // A rounded share can never exceed what is left to give out, and the
+            // clamp keeps that true even if the tax total and the journal disagree
+            // in a way this code did not anticipate.
+            if ($share->greaterThan($remaining)) {
+                $share = $remaining;
+            }
+
+            $line->forceFill(['base_tax_amount' => $share->toDatabase()])->save();
+
+            $remaining = $remaining->minus($share);
+        }
     }
 
     /**

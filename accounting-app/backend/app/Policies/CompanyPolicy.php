@@ -72,6 +72,21 @@ class CompanyPolicy
     }
 
     /**
+     * Read the company's currency/FX accounting controls.
+     *
+     * Company-scoped because the findings describe this company's ledger and
+     * configuration, so membership is required in addition to the capability. It is
+     * deliberately not folded into `accounting.reports.view`: the controls expose
+     * configuration gaps (a missing base currency, unconfigured FX accounts) that a
+     * report does not, so they are granted separately.
+     */
+    public function viewControls(User $user, Company $company): bool
+    {
+        return $this->isMember($user, $company)
+            && $user->can(PermissionName::ControlsView->value);
+    }
+
+    /**
      * Switch the caller's active company.
      *
      * Any member of an active company may select it, regardless of role: this

@@ -40,6 +40,7 @@ class ProfitLossReportService extends JournalReportService
 
         return [
             'period' => $this->period($from, $to),
+            'base_currency' => $this->baseCurrency($company),
             'revenue' => [
                 'total' => $this->amount($revenue['total']),
                 'accounts' => $revenue['rows'],

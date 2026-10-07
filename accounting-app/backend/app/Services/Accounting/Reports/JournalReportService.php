@@ -116,6 +116,28 @@ abstract class JournalReportService
     }
 
     /**
+     * The base-currency disclosure block (Phase 14 §21.1).
+     *
+     * Every balance this report family prints is denominated here. The block is
+     * returned rather than assumed: a report that does not say which currency it
+     * is in leaves a client to guess, and a guess is how a foreign amount gets
+     * read as a ledger amount - the exact failure §21.1 exists to prevent.
+     *
+     * @return array{code: string|null, name: string|null, symbol: string|null, decimals: int|null}
+     */
+    protected function baseCurrency(Company $company): array
+    {
+        $currency = $company->currency;
+
+        return [
+            'code' => $currency?->code,
+            'name' => $currency?->name,
+            'symbol' => $currency?->symbol,
+            'decimals' => $currency?->decimal_precision,
+        ];
+    }
+
+    /**
      * Accounts of one type, each with its balance signed on that type's side.
      *
      * The type is passed in rather than read from the account here, because the
