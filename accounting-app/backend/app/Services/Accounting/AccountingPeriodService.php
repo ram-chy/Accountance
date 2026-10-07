@@ -2,11 +2,13 @@
 
 namespace App\Services\Accounting;
 
+use App\Enums\AuditAction;
 use App\Enums\PeriodStatus;
 use App\Models\AccountingPeriod;
 use App\Models\Company;
 use App\Models\FinancialYear;
 use App\Models\User;
+use App\Services\Audit\AuditService;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
@@ -30,6 +32,8 @@ class AccountingPeriodService
     public function __construct(
         private readonly FinancialYearService $years,
         private readonly AccountingPeriodResolver $resolver,
+        private readonly PeriodClosingCheckService $closingCheck,
+        private readonly AuditService $audit,
     ) {}
 
     /**
@@ -232,6 +236,22 @@ class AccountingPeriodService
                 ]);
             }
 
+            /*
+             * Phase 15. Closing is refused while a critical control fails. The
+             * review runs after the lock is taken and before anything is written,
+             * so the state it inspects is the locked state and a failed review
+             * rolls the whole close back. The controls are read-only, so a review
+             * can never itself change accounting history.
+             */
+            $review = $this->closingCheck->review($fresh->company, $fresh);
+
+            if (! $review['eligible']) {
+                throw ValidationException::withMessages([
+                    'period' => 'This period cannot be closed. '.$review['required_action']
+                        .' '.$this->blockingSummary($review['blocking_findings']),
+                ]);
+            }
+
             $fresh->forceFill([
                 'status' => PeriodStatus::Closed->value,
                 'closed_by' => $actor->getKey(),
@@ -247,8 +267,34 @@ class AccountingPeriodService
                 'reopened_at' => null,
             ])->save();
 
+            $this->audit->lifecycle(
+                AuditAction::Closed,
+                $fresh,
+                $actor,
+                ['status' => PeriodStatus::Open->value],
+                ['status' => PeriodStatus::Closed->value],
+                [
+                    'period_name' => $fresh->name,
+                    'period_start' => $fresh->start_date?->toDateString(),
+                    'period_end' => $fresh->end_date?->toDateString(),
+                ],
+            );
+
             return $fresh;
         });
+    }
+
+    /**
+     * Render the blocking findings as one clause for the refusal message.
+     *
+     * @param  list<array<string, mixed>>  $blocking
+     */
+    private function blockingSummary(array $blocking): string
+    {
+        return implode(' ', array_map(
+            fn (array $finding) => '['.$finding['control_code'].'] '.$finding['description'],
+            array_slice($blocking, 0, 3),
+        ));
     }
 
     /**
@@ -321,6 +367,19 @@ class AccountingPeriodService
                 'reopened_by' => $actor->getKey(),
                 'reopened_at' => now(),
             ])->save();
+
+            $this->audit->lifecycle(
+                AuditAction::Reopened,
+                $fresh,
+                $actor,
+                ['status' => PeriodStatus::Closed->value],
+                ['status' => PeriodStatus::Open->value],
+                [
+                    'period_name' => $fresh->name,
+                    'period_start' => $fresh->start_date?->toDateString(),
+                    'period_end' => $fresh->end_date?->toDateString(),
+                ],
+            );
 
             return $fresh;
         });

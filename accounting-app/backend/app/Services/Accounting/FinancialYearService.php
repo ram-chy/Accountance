@@ -2,12 +2,17 @@
 
 namespace App\Services\Accounting;
 
+use App\Enums\AuditAction;
+use App\Enums\ControlStatus;
 use App\Enums\FinancialYearStatus;
 use App\Enums\PeriodStatus;
 use App\Models\AccountingPeriod;
 use App\Models\Company;
 use App\Models\FinancialYear;
 use App\Models\User;
+use App\Services\Accounting\Controls\AccountingControlService;
+use App\Services\Accounting\Controls\ControlFinding;
+use App\Services\Audit\AuditService;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
@@ -32,6 +37,11 @@ use Illuminate\Validation\ValidationException;
  */
 class FinancialYearService
 {
+    public function __construct(
+        private readonly AccountingControlService $controls,
+        private readonly AuditService $audit,
+    ) {}
+
     /**
      * Create a financial year, rejecting any range that overlaps an existing one.
      *
@@ -232,11 +242,45 @@ class FinancialYearService
                 ]);
             }
 
+            /*
+             * Phase 15. Year-end finalization is refused while a critical company
+             * control fails, exactly as a period close is. The year lock is already
+             * held, so the state the controls read cannot move under us, and a
+             * refusal rolls the whole transaction back.
+             */
+            $blockers = array_values(array_filter(
+                $this->controls->run($fresh->company),
+                fn (ControlFinding $finding) => $finding->status === ControlStatus::Fail,
+            ));
+
+            if ($blockers !== []) {
+                throw ValidationException::withMessages([
+                    'financial_year' => 'This financial year cannot be finalized while critical accounting controls fail. '
+                        .implode(' ', array_map(
+                            fn (ControlFinding $finding) => '['.$finding->controlCode.'] '.$finding->description,
+                            array_slice($blockers, 0, 3),
+                        )),
+                ]);
+            }
+
             $fresh->forceFill([
                 'status' => FinancialYearStatus::Closed->value,
                 'closed_by' => $actor->getKey(),
                 'closed_at' => now(),
             ])->save();
+
+            $this->audit->lifecycle(
+                AuditAction::Closed,
+                $fresh,
+                $actor,
+                ['status' => FinancialYearStatus::Open->value],
+                ['status' => FinancialYearStatus::Closed->value],
+                [
+                    'financial_year_name' => $fresh->name,
+                    'financial_year_start' => $fresh->start_date?->toDateString(),
+                    'financial_year_end' => $fresh->end_date?->toDateString(),
+                ],
+            );
 
             return $fresh;
         });

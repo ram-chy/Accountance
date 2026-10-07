@@ -4,10 +4,13 @@ namespace App\Services\Accounting\Controls;
 
 use App\Enums\ControlStatus;
 use App\Enums\JournalStatus;
+use App\Models\AccountingPeriod;
 use App\Models\Company;
+use App\Models\Journal;
 use App\Models\JournalLine;
 use App\Services\Accounting\Currency\CompanyCurrencyService;
 use App\Services\Accounting\Currency\RealizedFxService;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Collection;
 
 /**
@@ -50,6 +53,20 @@ class AccountingControlService
 
     public const ACCOUNT_DOCUMENT_CURRENCY = 'ACCOUNT_DOCUMENT_CURRENCY';
 
+    /*
+    | Phase 15, period-close integrity. These three are the checks a period-end
+    | review runs before it lets a period close; they are company-wide and
+    | unfiltered in run(), and period-scoped through forPeriod(). They are
+    | deliberately separate from the FX codes above: an FX code reports a currency
+    | inconsistency, these report a journal that could never have been posted in
+    | the first place, which is a different class of fault.
+    */
+    public const UNBALANCED_POSTED_JOURNAL = 'UNBALANCED_POSTED_JOURNAL';
+
+    public const INVALID_JOURNAL_LINE = 'INVALID_JOURNAL_LINE';
+
+    public const POSTED_JOURNAL_OUTSIDE_PERIOD = 'POSTED_JOURNAL_OUTSIDE_PERIOD';
+
     public function __construct(
         private readonly CompanyCurrencyService $companyCurrency,
         private readonly RealizedFxService $realizedFx,
@@ -69,6 +86,34 @@ class AccountingControlService
             ...$this->invalidHistoricalFxFindings($company),
             ...$this->foreignSettlementFindings($company),
             ...$this->accountDocumentCurrencyFindings($company),
+            ...$this->journalBalanceFindings($company),
+            ...$this->journalLineIntegrityFindings($company),
+            ...$this->periodCoverageFindings($company),
+        ];
+    }
+
+    /**
+     * Run the controls a period-end review needs for one period.
+     *
+     * The currency controls are company-wide by nature, so all six run whole.
+     * The three journal/period integrity checks are scoped to the journal dates
+     * inside the period, so the review answers a question about *this* period's
+     * history rather than about every period the company has ever opened.
+     *
+     * @return list<ControlFinding>
+     */
+    public function forPeriod(Company $company, AccountingPeriod $period): array
+    {
+        return [
+            ...$this->baseCurrencyFindings($company),
+            ...$this->baseCurrencyChangeSafetyFindings($company),
+            ...$this->foreignTransactionRateFindings($company),
+            ...$this->invalidHistoricalFxFindings($company),
+            ...$this->foreignSettlementFindings($company),
+            ...$this->accountDocumentCurrencyFindings($company),
+            ...$this->journalBalanceFindings($company, $period),
+            ...$this->journalLineIntegrityFindings($company, $period),
+            ...$this->periodCoverageFindings($company, $period),
         ];
     }
 
@@ -351,6 +396,199 @@ class AccountingControlService
         return $findings === []
             ? [$this->passing(self::ACCOUNT_DOCUMENT_CURRENCY, 'No foreign-currency line is posted to an account that declares a different currency.')]
             : $findings;
+    }
+
+    /**
+     * Is every posted journal in scope a balanced double entry?
+     *
+     * A journal reaches POSTED only through JournalPostingService, which proves
+     * structure and balance inside its transaction, so a failure here means the
+     * row was changed outside the application - a migration, a data fix, a hand
+     * edit. That is exactly why it is a Fail: the ledger's central promise is
+     * that debits equal credits, and a posted entry that breaks it corrupts every
+     * report derived from the lines. This is the check a period close must not
+     * proceed past.
+     *
+     * @return list<ControlFinding>
+     */
+    public function journalBalanceFindings(Company $company, ?AccountingPeriod $period = null): array
+    {
+        $findings = [];
+
+        foreach ($this->postedJournals($company, $period)->with('lines')->get() as $journal) {
+            $lineCount = $journal->lines->count();
+            [$debit, $credit] = $this->totalsForJournal($journal);
+
+            if ($lineCount < 2 || bccomp($debit, $credit, 4) !== 0 || bccomp($debit, '0.0000', 4) === 0) {
+                $findings[] = new ControlFinding(
+                    controlCode: self::UNBALANCED_POSTED_JOURNAL,
+                    status: ControlStatus::Fail,
+                    description: sprintf(
+                        'Posted journal [%s] is not a valid balanced entry: %d line(s), debit %s against credit %s.',
+                        $journal->journal_number ?? $journal->getKey(),
+                        $lineCount,
+                        $debit,
+                        $credit,
+                    ),
+                    resourceType: $journal->getMorphClass(),
+                    resourceId: (int) $journal->getKey(),
+                    financialDate: $journal->journal_date?->toDateString(),
+                    details: [
+                        'journal_number' => $journal->journal_number,
+                        'line_count' => $lineCount,
+                        'total_debit' => $debit,
+                        'total_credit' => $credit,
+                        'difference' => bcsub($debit, $credit, 4),
+                    ],
+                );
+            }
+        }
+
+        return $findings === []
+            ? [$this->passing(self::UNBALANCED_POSTED_JOURNAL, 'Every posted journal is balanced and carries at least two lines.')]
+            : $findings;
+    }
+
+    /**
+     * Does every posted journal line point at an account the journal's own company
+     * owns, and does every line still have a journal?
+     *
+     * The account half is the one that matters company-wise: a line on company A
+     * pointing at company B's account would leak one company's balances into
+     * another's reports. The orphan half cannot occur under the foreign key, but it
+     * is asked anyway because the cost of asking is one query and the cost of not
+     * asking is trusting a constraint to have been installed everywhere.
+     *
+     * @return list<ControlFinding>
+     */
+    public function journalLineIntegrityFindings(Company $company, ?AccountingPeriod $period = null): array
+    {
+        $findings = [];
+
+        foreach ($this->postedJournals($company, $period)->with(['lines.account'])->get() as $journal) {
+            foreach ($journal->lines as $line) {
+                $account = $line->account;
+
+                if ($account !== null && (int) $account->company_id === (int) $journal->company_id) {
+                    continue;
+                }
+
+                $findings[] = new ControlFinding(
+                    controlCode: self::INVALID_JOURNAL_LINE,
+                    status: ControlStatus::Fail,
+                    description: $account === null
+                        ? sprintf('Posted journal [%s] has a line referencing account #%s, which does not exist.', $journal->journal_number ?? $journal->getKey(), $line->account_id)
+                        : sprintf('Posted journal [%s] has a line referencing account #%s, which belongs to a different company.', $journal->journal_number ?? $journal->getKey(), $line->account_id),
+                    resourceType: $line->getMorphClass(),
+                    resourceId: (int) $line->getKey(),
+                    financialDate: $journal->journal_date?->toDateString(),
+                    details: [
+                        'journal_id' => (int) $journal->getKey(),
+                        'account_id' => $line->account_id === null ? null : (int) $line->account_id,
+                    ],
+                );
+            }
+        }
+
+        $orphanCount = JournalLine::query()->whereDoesntHave('journal')->count();
+
+        if ($orphanCount > 0) {
+            $findings[] = new ControlFinding(
+                controlCode: self::INVALID_JOURNAL_LINE,
+                status: ControlStatus::Fail,
+                description: sprintf('%d journal line(s) exist without a parent journal.', $orphanCount),
+                details: ['orphan_line_count' => $orphanCount],
+            );
+        }
+
+        return $findings === []
+            ? [$this->passing(self::INVALID_JOURNAL_LINE, 'Every posted journal line references an existing account of the journal\'s own company.')]
+            : $findings;
+    }
+
+    /**
+     * Does every posted journal in scope fall inside an accounting period of its
+     * own company?
+     *
+     * Posting requires a covering period, so this can only fail on history that
+     * predates the calendar or was moved by a data fix. A posted entry outside any
+     * period is invisible to anything that reasons per-period (a period-end
+     * review, a period report) and is the fault §8.B asks the review to find.
+     *
+     * @return list<ControlFinding>
+     */
+    public function periodCoverageFindings(Company $company, ?AccountingPeriod $period = null): array
+    {
+        $periods = AccountingPeriod::query()
+            ->where('company_id', $company->getKey())
+            ->get(['id', 'name', 'start_date', 'end_date']);
+
+        $findings = [];
+
+        foreach ($this->postedJournals($company, $period)->get(['id', 'company_id', 'journal_number', 'journal_date']) as $journal) {
+            $day = $journal->journal_date?->toDateString();
+            $covering = $periods->first(fn (AccountingPeriod $candidate) => $candidate->start_date->toDateString() <= $day
+                && $candidate->end_date->toDateString() >= $day);
+
+            if ($covering !== null) {
+                continue;
+            }
+
+            $findings[] = new ControlFinding(
+                controlCode: self::POSTED_JOURNAL_OUTSIDE_PERIOD,
+                status: ControlStatus::Fail,
+                description: sprintf(
+                    'Posted journal [%s] dated %s does not fall inside any accounting period of this company.',
+                    $journal->journal_number ?? $journal->getKey(),
+                    $day,
+                ),
+                resourceType: $journal->getMorphClass(),
+                resourceId: (int) $journal->getKey(),
+                financialDate: $day,
+                details: ['journal_number' => $journal->journal_number],
+            );
+        }
+
+        return $findings === []
+            ? [$this->passing(self::POSTED_JOURNAL_OUTSIDE_PERIOD, 'Every posted journal falls inside an accounting period of its company.')]
+            : $findings;
+    }
+
+    /**
+     * Posted journals of a company, optionally restricted to a period's dates.
+     *
+     * @return Builder<Journal>
+     */
+    private function postedJournals(Company $company, ?AccountingPeriod $period = null): Builder
+    {
+        $query = Journal::query()
+            ->where('company_id', $company->getKey())
+            ->where('status', JournalStatus::Posted->value);
+
+        if ($period !== null) {
+            $query->whereDate('journal_date', '>=', $period->start_date->toDateString())
+                ->whereDate('journal_date', '<=', $period->end_date->toDateString());
+        }
+
+        return $query;
+    }
+
+    /**
+     * Exact base-currency debit and credit totals for one journal's lines.
+     *
+     * @return array{0: string, 1: string}
+     */
+    private function totalsForJournal(Journal $journal): array
+    {
+        $debit = '0.0000';
+        $credit = '0.0000';
+
+        foreach ($journal->lines as $line) {
+            $debit = bcadd($debit, (string) $line->debit, 4);
+            $credit = bcadd($credit, (string) $line->credit, 4);
+        }
+
+        return [$debit, $credit];
     }
 
     /**

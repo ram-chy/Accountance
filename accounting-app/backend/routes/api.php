@@ -252,6 +252,8 @@ Route::middleware(['auth:api', 'auth.fresh', 'company.context', 'throttle:api'])
             Route::post('/', [AccountingPeriodController::class, 'store'])->name('accounting.periods.store');
             Route::get('/{period}', [AccountingPeriodController::class, 'show'])->name('accounting.periods.show');
             Route::put('/{period}', [AccountingPeriodController::class, 'update'])->name('accounting.periods.update');
+            Route::get('/{period}/closing-check', [AccountingPeriodController::class, 'closingCheck'])
+                ->name('accounting.periods.closing_check');
             Route::post('/{period}/close', [AccountingPeriodController::class, 'close'])
                 ->name('accounting.periods.close');
             Route::post('/{period}/reopen', [AccountingPeriodController::class, 'reopen'])

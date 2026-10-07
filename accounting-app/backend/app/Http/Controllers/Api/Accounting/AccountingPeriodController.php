@@ -8,6 +8,7 @@ use App\Http\Requests\Accounting\UpdatePeriodRequest;
 use App\Http\Resources\AccountingPeriodResource;
 use App\Models\AccountingPeriod;
 use App\Services\Accounting\AccountingPeriodService;
+use App\Services\Accounting\PeriodClosingCheckService;
 use App\Services\CompanyContext;
 use App\Support\ApiResponse;
 use Illuminate\Http\JsonResponse;
@@ -27,6 +28,7 @@ class AccountingPeriodController extends Controller
 {
     public function __construct(
         private readonly AccountingPeriodService $periods,
+        private readonly PeriodClosingCheckService $closingCheck,
         private readonly CompanyContext $companyContext,
     ) {}
 
@@ -106,6 +108,27 @@ class AccountingPeriodController extends Controller
         return ApiResponse::success(
             message: 'Accounting period updated successfully.',
             data: new AccountingPeriodResource($updated),
+        );
+    }
+
+    /**
+     * Read-only period-end review.
+     *
+     * Answers "may this period be closed, and if not, why" without closing
+     * anything. It rides on the view permission rather than close: reading the
+     * state of a period one may not close is not itself a control act, and a
+     * user who can see the period already has the right to know what would block
+     * its closure.
+     */
+    public function closingCheck(AccountingPeriod $period): JsonResponse
+    {
+        $this->authorize('view', $period);
+
+        $review = $this->closingCheck->review($period->company, $period);
+
+        return ApiResponse::success(
+            message: 'Period closing review evaluated successfully.',
+            data: $review,
         );
     }
 
