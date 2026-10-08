@@ -4,6 +4,7 @@ use App\Http\Controllers\Api\Accounting\AccountController;
 use App\Http\Controllers\Api\Accounting\AccountingControlController;
 use App\Http\Controllers\Api\Accounting\AccountingPeriodController;
 use App\Http\Controllers\Api\Accounting\BankReconciliationController;
+use App\Http\Controllers\Api\Accounting\BudgetController;
 use App\Http\Controllers\Api\Accounting\CashBankAccountController;
 use App\Http\Controllers\Api\Accounting\CashBankTransactionController;
 use App\Http\Controllers\Api\Accounting\CompanyFxSettingController;
@@ -803,5 +804,52 @@ Route::middleware(['auth:api', 'auth.fresh', 'company.context', 'throttle:api'])
                 ->name('accounting.fixed-assets.depreciate');
             Route::post('/{fixedAsset}/dispose', [FixedAssetController::class, 'dispose'])
                 ->name('accounting.fixed-assets.dispose');
+        });
+
+        /*
+        |--------------------------------------------------------------------------
+        | Budgeting and Budget Variance (Phase 16)
+        |--------------------------------------------------------------------------
+        |
+        | A budget is a plan, not a ledger record. Nothing below posts, and the
+        | variance endpoint reads its actuals from posted journals at request
+        | time. `{budget}` binds to the active company in AppServiceProvider, so a
+        | foreign id 404s before a controller runs.
+        |
+        | Approval and revision are POST acts, never PUT: an approved budget is
+        | immutable, and a revision is a NEW draft version. PUT can only edit a
+        | draft, so "approved means unchangeable" holds through the API rather
+        | than only in the service.
+        |
+        | Lines are addressed under their budget and resolved through it, because
+        | a line has no company_id of its own - a global binding by primary key
+        | would resolve another company's line.
+        */
+        Route::prefix('budgets')->group(function () {
+            Route::get('/', [BudgetController::class, 'index'])
+                ->name('accounting.budgets.index');
+            Route::post('/', [BudgetController::class, 'store'])
+                ->name('accounting.budgets.store');
+
+            Route::get('/{budget}', [BudgetController::class, 'show'])
+                ->name('accounting.budgets.show');
+            Route::put('/{budget}', [BudgetController::class, 'update'])
+                ->name('accounting.budgets.update');
+            Route::delete('/{budget}', [BudgetController::class, 'destroy'])
+                ->name('accounting.budgets.destroy');
+
+            Route::post('/{budget}/approve', [BudgetController::class, 'approve'])
+                ->name('accounting.budgets.approve');
+            Route::post('/{budget}/revise', [BudgetController::class, 'revise'])
+                ->name('accounting.budgets.revise');
+            Route::get('/{budget}/variance', [BudgetController::class, 'variance'])
+                ->name('accounting.budgets.variance');
+
+            Route::post('/{budget}/lines', [BudgetController::class, 'storeLine'])
+                ->name('accounting.budgets.lines.store');
+            Route::put('/{budget}/lines/{line}', [BudgetController::class, 'updateLine'])
+                ->name('accounting.budgets.lines.update');
+            Route::delete('/{budget}/lines/{line}', [BudgetController::class, 'destroyLine'])
+                ->name('accounting.budgets.lines.destroy');
         });
     });

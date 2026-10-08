@@ -118,6 +118,13 @@ return [
         'accounting.exchange_rate.update',
         'accounting.fx.update',
         'accounting.controls.view',
+
+        // Phase 16
+        'accounting.budgets.view',
+        'accounting.budgets.create',
+        'accounting.budgets.update',
+        'accounting.budgets.delete',
+        'accounting.budgets.approve',
     ],
 
     'roles' => [
@@ -236,6 +243,22 @@ return [
             'accounting.exchange_rate.update',
             'accounting.fx.update',
             'accounting.controls.view',
+
+            /*
+            | Phase 16. The Accountant prepares and maintains budgets: reading
+            | them, raising drafts, editing drafts and their lines, and discarding
+            | a draft raised in error. It deliberately does NOT get `approve`.
+            |
+            | Approval is the control the phase adds, exactly as closing a period
+            | is the control Phase 8 added - and closing is held by Admin only,
+            | not by the role that maintains the periods. A plan becomes binding
+            | only when a second, deliberately granted capability is exercised,
+            | which is what makes the separation meaningful.
+            */
+            'accounting.budgets.view',
+            'accounting.budgets.create',
+            'accounting.budgets.update',
+            'accounting.budgets.delete',
         ],
 
         /*
@@ -319,6 +342,22 @@ return [
             'accounting.currency.view',
             'accounting.exchange_rate.view',
             'accounting.controls.view',
+
+            /*
+            | Phase 16. Manager reads budgets and approves them, and holds nothing
+            | else here. This is the one budgeting write Manager receives, and it
+            | is granted on purpose: the brief's role expectation is that Manager
+            | performs "budgeting review/approval", and approval is a control
+            | decision - the same kind of act as the `bank_reconciliation.complete`
+            | grant Manager already holds - rather than the day-to-day preparation
+            | the Accountant does.
+            |
+            | It may not create, edit or delete, so a budget approved by Manager
+            | was necessarily prepared by someone else. That separation is the
+            | point of the grant.
+            */
+            'accounting.budgets.view',
+            'accounting.budgets.approve',
         ],
 
         /*

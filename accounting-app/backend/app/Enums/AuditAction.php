@@ -23,8 +23,11 @@ namespace App\Enums;
  *       DRAFT/POSTED only and posting is one-way; a correction is a new,
  *       separate journal. See PHASE_13_REPORT.md for the documented limitation.
  *
- *   APPROVED / SUBMITTED / SENT
- *       There is no approval workflow, so there is no such event to record.
+ *   SUBMITTED / SENT
+ *       There is no submission or send workflow, so there is no such event to
+ *       record. APPROVED is present because Phase 16 introduced one approval
+ *       workflow - a budget is approved, and that is the accounting-control act
+ *       the phase is about.
  *
  * The distinction between a security action and a financial one is asked rather
  * than compared, so "which events may the audit report show" has one answer in
@@ -49,6 +52,13 @@ enum AuditAction: string
     case Reopened = 'REOPENED';
     case Activated = 'ACTIVATED';
     case Deactivated = 'DEACTIVATED';
+
+    /*
+    | Phase 16. A budget draft becomes final. It is a lifecycle act like CLOSED,
+    | not an update: the draft's fields do not change, its state does, and the
+    | point of recording it is that somebody decided the plan was final.
+    */
+    case Approved = 'APPROVED';
 
     /*
     | Security events. These are not company-scoped in the accounting sense: they

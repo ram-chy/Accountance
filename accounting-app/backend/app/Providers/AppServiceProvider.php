@@ -5,6 +5,7 @@ namespace App\Providers;
 use App\Models\Account;
 use App\Models\AccountingPeriod;
 use App\Models\BankReconciliation;
+use App\Models\Budget;
 use App\Models\CashBankTransaction;
 use App\Models\Company;
 use App\Models\CompanyFxSetting;
@@ -27,6 +28,7 @@ use App\Models\User;
 use App\Policies\AccountingPeriodPolicy;
 use App\Policies\AccountPolicy;
 use App\Policies\BankReconciliationPolicy;
+use App\Policies\BudgetPolicy;
 use App\Policies\CashBankTransactionPolicy;
 use App\Policies\CompanyFxSettingPolicy;
 use App\Policies\CompanyPolicy;
@@ -186,6 +188,21 @@ class AppServiceProvider extends ServiceProvider
         Gate::policy(CompanyFxSetting::class, CompanyFxSettingPolicy::class);
 
         /*
+         | Phase 16 policy.
+         |
+         | One policy for the whole Budget module. A budget's lines have no
+         | independent existence, so line endpoints authorize against the parent
+         | budget rather than a second policy class; `revise` rides the create
+         | grant because a revision is a new draft, while `approve` is its own
+         | grant because committing a plan is the control the phase adds.
+         |
+         | Registered explicitly, as every phase since Phase 4 has done: a policy
+         | discovered by naming convention stops being applied the moment the class
+         | is renamed or moved, and the failure is silent.
+         */
+        Gate::policy(Budget::class, BudgetPolicy::class);
+
+        /*
          | Accounting route binding.
          |
          | Registered here rather than in each controller so the tenant check
@@ -292,6 +309,16 @@ class AppServiceProvider extends ServiceProvider
          | to scope by, so it resolves through Laravel's ordinary model binding.
          */
         $scoped('exchangeRate', ExchangeRate::class);
+
+        /*
+         | Phase 16. A budget carries company_id, so the same property holds: a
+         | budget reaching a controller is already known to belong to the active
+         | company, and a foreign id 404s before any method runs. Budget LINES are
+         | deliberately NOT bound here - they have no company_id, so a binding by
+         | primary key could resolve another company's line; they are resolved
+         | through their budget in the controller instead.
+         */
+        $scoped('budget', Budget::class);
     }
 
     /**

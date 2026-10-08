@@ -327,6 +327,35 @@ enum PermissionName: string
     case FxUpdate = 'accounting.fx.update';
     case ControlsView = 'accounting.controls.view';
 
+    /*
+    | Phase 16 - Budgeting & Budget Variance Analysis.
+    |
+    | Five capabilities, the same document shape Phase 5 gave invoices and bills
+    | for everything but approval:
+    |
+    |   view     read budgets, their lines and the budget-vs-actual report
+    |   create   raise a new draft budget or a revision
+    |   update   edit a draft budget and its lines
+    |   delete   discard a draft budget
+    |   approve  finalize a draft, after which it is immutable
+    |
+    | `approve` is separate from `update` for the same reason `post` is separate
+    | from `update` on every other document: preparing a plan and committing it
+    | are different acts, and the second is the control the phase exists to add.
+    | An approved budget cannot be edited at all - a change is a new version - so
+    | the grant is the decision to accept a plan, not a right to alter one.
+    |
+    | These are deliberately NOT riders on `accounting.reports.view`: a budget is
+    | a company's forward plan rather than a read of posted history, and a role
+    | that may read the ledger need not thereby see what management intends to do
+    | with it.
+    */
+    case BudgetsView = 'accounting.budgets.view';
+    case BudgetsCreate = 'accounting.budgets.create';
+    case BudgetsUpdate = 'accounting.budgets.update';
+    case BudgetsDelete = 'accounting.budgets.delete';
+    case BudgetsApprove = 'accounting.budgets.approve';
+
     /**
      * @return array<int, string>
      */
