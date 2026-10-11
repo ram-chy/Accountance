@@ -356,6 +356,46 @@ enum PermissionName: string
     case BudgetsDelete = 'accounting.budgets.delete';
     case BudgetsApprove = 'accounting.budgets.approve';
 
+    /*
+    | Phase 17 - Financial Dimensions & Cost Centers.
+    |
+    | Four capabilities, the same master-data shape the chart of accounts uses:
+    |
+    |   view    read dimensions and their values
+    |   create  add a dimension or a value
+    |   update  edit one, and retire or reactivate it
+    |   delete  remove one that nothing has ever referenced
+    |
+    | WHY NOT accounting.dimension_values.*
+    |
+    | The brief sketches a second namespace for values and asks that it not be
+    | adopted blindly. It is not adopted. A value is not an independent resource:
+    | it is addressed only under its dimension, it inherits that dimension's
+    | company, and it cannot be created, renamed or retired by anyone who may not
+    | do the same to its parent. Two permission sets would grant and withhold the
+    | same capability twice and the two would drift - the failure Phase 6 avoided
+    | by collapsing eleven report permissions into one, and Phase 8 avoided by
+    | refusing a parallel accounting.financial_years.* set.
+    |
+    | WHY ACTIVATE/DEACTIVATE ARE NOT THEIR OWN GRANTS
+    |
+    | Retiring a cost centre is the reversible form of editing one, and making it
+    | a separate capability would produce a role that may rename a dimension but
+    | not take it out of use. Account and FixedAssetCategory both ride `update`
+    | for exactly this reason.
+    |
+    | WHY THERE IS NO REPORT RIDER
+    |
+    | A dimension filter on the P&L or the general ledger is a filter on the same
+    | posted ledger `accounting.reports.view` already reads. Phase 6's reasoning
+    | is unchanged by the axis the report is cut along, so no new reporting
+    | capability exists here.
+    */
+    case DimensionsView = 'accounting.dimensions.view';
+    case DimensionsCreate = 'accounting.dimensions.create';
+    case DimensionsUpdate = 'accounting.dimensions.update';
+    case DimensionsDelete = 'accounting.dimensions.delete';
+
     /**
      * @return array<int, string>
      */

@@ -39,6 +39,16 @@ class StoreBudgetLineRequest extends FormRequest
             'accounting_period_id' => $this->companyPeriodRule(),
             'amount' => array_merge(['required'], $this->nonNegativeMoneyRule()),
             'description' => ['nullable', 'string', 'max:500'],
+
+            /*
+             * Phase 17: optional analytical metadata. Only the shape is checked
+             * here; ownership, activity and value-vs-dimension are validated in
+             * BudgetLineService through the shared DimensionAssignmentValidator.
+             */
+            'dimensions' => ['sometimes', 'array'],
+            'dimensions.*' => ['required', 'array'],
+            'dimensions.*.dimension_id' => ['required', 'integer'],
+            'dimensions.*.value_id' => ['required', 'integer'],
         ];
     }
 }

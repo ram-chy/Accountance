@@ -9,6 +9,7 @@ use App\Models\Budget;
 use App\Models\BudgetLine;
 use App\Models\Company;
 use App\Models\User;
+use App\Services\Accounting\Dimensions\DimensionAssignmentValidator;
 use App\Support\Money;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Database\QueryException;
@@ -44,6 +45,10 @@ use Illuminate\Validation\ValidationException;
  */
 class BudgetLineService
 {
+    public function __construct(
+        private readonly DimensionAssignmentValidator $dimensions,
+    ) {}
+
     /**
      * @param  array<string, mixed>  $data
      *
@@ -64,6 +69,8 @@ class BudgetLineService
             $this->assertNoDuplicate($fresh, $account, $period, null);
 
             $line = $this->write($fresh, $account, $period, $data);
+
+            $this->replaceDimensions($company, $line, $data['dimensions'] ?? []);
 
             $this->touch($fresh, $actor);
 
@@ -107,6 +114,13 @@ class BudgetLineService
             ]);
 
             $this->saveGuardingDuplicate($lockedLine);
+
+            if (array_key_exists('dimensions', $data)) {
+                // Full replace, matching journal-line semantics: a line has one
+                // value per dimension type, so a present key - even an empty
+                // array, which clears the labels - is the whole set.
+                $this->replaceDimensions($company, $lockedLine, $data['dimensions']);
+            }
 
             $this->touch($fresh, $actor);
 
@@ -235,6 +249,37 @@ class BudgetLineService
     private function touch(Budget $budget, User $actor): void
     {
         $budget->forceFill(['updated_by' => $actor->getKey()])->save();
+    }
+
+    /**
+     * Validate and persist a line's dimension labels.
+     *
+     * The shared validator checks ownership, activity and value-vs-dimension
+     * against the ACTIVE company - a dimension from another company cannot be
+     * accepted because the junction table carries no company of its own, so the
+     * company boundary lives at this resolve step. Errors are raised as a
+     * whole-line validation failure through the `dimensions` field path.
+     *
+     * @throws ValidationException
+     */
+    private function replaceDimensions(Company $company, BudgetLine $line, array $assignments): void
+    {
+        $errors = [];
+
+        $resolved = $this->dimensions->resolve($company, $assignments, 'dimensions', $errors);
+
+        if ($errors !== []) {
+            throw ValidationException::withMessages($errors);
+        }
+
+        $line->budgetLineDimensions()->delete();
+
+        foreach ($resolved as $assignment) {
+            $line->budgetLineDimensions()->create([
+                'financial_dimension_id' => $assignment['financial_dimension_id'],
+                'financial_dimension_value_id' => $assignment['financial_dimension_value_id'],
+            ]);
+        }
     }
 
     private function assertBudgetOfCompany(Budget $budget, Company $company): void

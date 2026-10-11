@@ -8,6 +8,7 @@ use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 /**
  * One planned amount for one account in one accounting period of a budget.
@@ -85,5 +86,10 @@ class BudgetLine extends Model
     public function amount(): Money
     {
         return Money::of($this->amount);
+    }
+
+    public function budgetLineDimensions(): HasMany
+    {
+        return $this->hasMany(BudgetLineDimension::class, 'budget_line_id');
     }
 }

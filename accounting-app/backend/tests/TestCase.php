@@ -340,6 +340,61 @@ abstract class TestCase extends BaseTestCase
         return $journal->refresh();
     }
 
+    /**
+     * Post a balanced journal whose lines carry dimension labels (Phase 17).
+     *
+     * Dimensions attach to individual lines, so this variant of postJournal
+     * accepts a label list for the credit (revenue) line and, separately, one
+     * for the debit (expense) line. Either may be empty (`[]`), which leaves the
+     * line unlabelled. Going through the real endpoint keeps the assignment
+     * validation and the posting path under test, exactly as postJournal does.
+     *
+     * @param  array<int, array{dimension_id: int, value_id: int}>  $creditDimensions
+     * @param  array<int, array{dimension_id: int, value_id: int}>  $debitDimensions
+     */
+    protected function postJournalWithDimensions(
+        User $user,
+        Company $company,
+        Account $debitAccount,
+        Account $creditAccount,
+        string $amount,
+        string $date,
+        array $creditDimensions = [],
+        array $debitDimensions = []
+    ): Journal {
+        $this->makePeriodFor($company, $date, 'P '.substr($date, 0, 7).uniqid());
+
+        $debitLine = ['account_id' => $debitAccount->getKey(), 'debit' => $amount, 'credit' => '0'];
+        $creditLine = ['account_id' => $creditAccount->getKey(), 'debit' => '0', 'credit' => $amount];
+
+        if ($debitDimensions !== []) {
+            $debitLine['dimensions'] = $debitDimensions;
+        }
+
+        if ($creditDimensions !== []) {
+            $creditLine['dimensions'] = $creditDimensions;
+        }
+
+        $response = $this->actingAsJwt($user)
+            ->withCompanyContext($company)
+            ->postJson('/api/journals', [
+                'journal_date' => $date,
+                'description' => 'Test entry with dimensions',
+                'lines' => [$debitLine, $creditLine],
+            ]);
+
+        $response->assertSuccessful();
+
+        $journal = Journal::findOrFail($response->json('data.id'));
+
+        $this->actingAsJwt($user)
+            ->withCompanyContext($company)
+            ->postJson("/api/journals/{$journal->getKey()}/post")
+            ->assertSuccessful();
+
+        return $journal->refresh();
+    }
+
     /*
     |--------------------------------------------------------------------------
     | Transaction test helpers (Phase 5)

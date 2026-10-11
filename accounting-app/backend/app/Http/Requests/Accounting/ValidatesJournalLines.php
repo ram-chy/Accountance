@@ -57,6 +57,20 @@ trait ValidatesJournalLines
              */
             'lines.*.debit' => ['required', 'decimal:0,'.$this->maxInputDecimals()],
             'lines.*.credit' => ['required', 'decimal:0,'.$this->maxInputDecimals()],
+
+            /*
+             * Phase 17: optional analytical metadata on a line. Only the shape is
+             * checked here - array of {dimension_id, value_id} pairs. Whether a
+             * dimension/value exists, is active, belongs to the active company and
+             * belongs to its partner is a cross-row question answered by
+             * DimensionAssignmentValidator inside JournalService, which sees the
+             * company and can collect every line's errors at once (the same split
+             * the account owned-by-company rule uses).
+             */
+            'lines.*.dimensions' => ['sometimes', 'array'],
+            'lines.*.dimensions.*' => ['required', 'array'],
+            'lines.*.dimensions.*.dimension_id' => ['required', 'integer'],
+            'lines.*.dimensions.*.value_id' => ['required', 'integer'],
         ];
     }
 

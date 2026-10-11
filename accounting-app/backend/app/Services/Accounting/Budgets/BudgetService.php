@@ -221,7 +221,7 @@ class BudgetService
         $this->assertBelongsToCompany($budget, $company);
 
         return DB::transaction(function () use ($budget, $actor, $data) {
-            $source = $this->lock($budget)->load('lines');
+            $source = $this->lock($budget)->load(['lines', 'lines.budgetLineDimensions']);
 
             if (! $source->isApproved()) {
                 throw ValidationException::withMessages([
@@ -255,12 +255,28 @@ class BudgetService
             $this->saveGuardingUniqueVersion($revision);
 
             foreach ($source->lines as $line) {
-                $revision->lines()->create([
+                $copied = $revision->lines()->create([
                     'account_id' => $line->account_id,
                     'accounting_period_id' => $line->accounting_period_id,
                     'amount' => $line->getRawOriginal('amount'),
                     'description' => $line->description,
                 ]);
+
+                /*
+                 * Phase 17: a revision copies its source's dimension labels, so
+                 * a versioned plan keeps its analytical scoping across versions.
+                 * The approved version and its labels stay untouched - that is
+                 * the point of versioning - and the copy is a pure replay of the
+                 * source's labels, never a re-validation against the current
+                 * company (a label is a record of what was authorised, and it
+                 * stays with the plan).
+                 */
+                foreach ($line->budgetLineDimensions as $link) {
+                    $copied->budgetLineDimensions()->create([
+                        'financial_dimension_id' => $link->financial_dimension_id,
+                        'financial_dimension_value_id' => $link->financial_dimension_value_id,
+                    ]);
+                }
             }
 
             $this->audit->created($revision, $actor, [

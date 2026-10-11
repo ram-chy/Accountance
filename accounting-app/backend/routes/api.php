@@ -11,6 +11,7 @@ use App\Http\Controllers\Api\Accounting\CompanyFxSettingController;
 use App\Http\Controllers\Api\Accounting\CreditDebitNoteController;
 use App\Http\Controllers\Api\Accounting\CurrencyController;
 use App\Http\Controllers\Api\Accounting\ExchangeRateController;
+use App\Http\Controllers\Api\Accounting\FinancialDimensionController;
 use App\Http\Controllers\Api\Accounting\FinancialYearController;
 use App\Http\Controllers\Api\Accounting\FixedAssetCategoryController;
 use App\Http\Controllers\Api\Accounting\FixedAssetController;
@@ -851,5 +852,58 @@ Route::middleware(['auth:api', 'auth.fresh', 'company.context', 'throttle:api'])
                 ->name('accounting.budgets.lines.update');
             Route::delete('/{budget}/lines/{line}', [BudgetController::class, 'destroyLine'])
                 ->name('accounting.budgets.lines.destroy');
+        });
+
+        /*
+        | Financial dimensions & cost centers (Phase 17).
+        |
+        | One resource family, not two: COST_CENTER is a dimension type rather than
+        | a resource of its own, so there is deliberately no /cost-centers route
+        | alongside /dimensions doing the same job twice. `{dimension}` binds to the
+        | active company in AppServiceProvider, so a foreign id 404s before a
+        | controller runs.
+        |
+        | Values are nested under their dimension everywhere - listing, creating,
+        | addressing - because a value has no company_id of its own and a binding by
+        | primary key could resolve another company's row. Resolving through the
+        | parent gives the nesting and the tenant check in one lookup.
+        |
+        | activate/deactivate are POST acts with their own guards rather than a
+        | state PUT can change as a side effect, following the accounts, taxes and
+        | fixed-asset category endpoints.
+        */
+        Route::prefix('dimensions')->group(function () {
+            Route::get('/', [FinancialDimensionController::class, 'index'])
+                ->name('accounting.dimensions.index');
+            Route::post('/', [FinancialDimensionController::class, 'store'])
+                ->name('accounting.dimensions.store');
+
+            Route::get('/{dimension}', [FinancialDimensionController::class, 'show'])
+                ->name('accounting.dimensions.show');
+            Route::put('/{dimension}', [FinancialDimensionController::class, 'update'])
+                ->name('accounting.dimensions.update');
+            Route::delete('/{dimension}', [FinancialDimensionController::class, 'destroy'])
+                ->name('accounting.dimensions.destroy');
+
+            Route::post('/{dimension}/activate', [FinancialDimensionController::class, 'activate'])
+                ->name('accounting.dimensions.activate');
+            Route::post('/{dimension}/deactivate', [FinancialDimensionController::class, 'deactivate'])
+                ->name('accounting.dimensions.deactivate');
+
+            Route::get('/{dimension}/values', [FinancialDimensionController::class, 'indexValues'])
+                ->name('accounting.dimensions.values.index');
+            Route::post('/{dimension}/values', [FinancialDimensionController::class, 'storeValue'])
+                ->name('accounting.dimensions.values.store');
+            Route::get('/{dimension}/values/{value}', [FinancialDimensionController::class, 'showValue'])
+                ->name('accounting.dimensions.values.show');
+            Route::put('/{dimension}/values/{value}', [FinancialDimensionController::class, 'updateValue'])
+                ->name('accounting.dimensions.values.update');
+            Route::delete('/{dimension}/values/{value}', [FinancialDimensionController::class, 'destroyValue'])
+                ->name('accounting.dimensions.values.destroy');
+
+            Route::post('/{dimension}/values/{value}/activate', [FinancialDimensionController::class, 'activateValue'])
+                ->name('accounting.dimensions.values.activate');
+            Route::post('/{dimension}/values/{value}/deactivate', [FinancialDimensionController::class, 'deactivateValue'])
+                ->name('accounting.dimensions.values.deactivate');
         });
     });

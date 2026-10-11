@@ -10,6 +10,7 @@ use App\Models\Journal;
 use App\Models\JournalLine;
 use App\Models\User;
 use App\Services\Accounting\Currency\DocumentCurrencyService;
+use App\Services\Accounting\Dimensions\DimensionAssignmentValidator;
 use App\Support\Money;
 use App\Support\Rate;
 use Illuminate\Support\Carbon;
@@ -52,6 +53,7 @@ class JournalService
         private readonly JournalNumberSequence $numbers,
         private readonly AccountingPeriodService $periods,
         private readonly DocumentCurrencyService $currencies,
+        private readonly DimensionAssignmentValidator $dimensions,
     ) {}
 
     /**
@@ -344,6 +346,25 @@ class JournalService
             $lineErrors = [];
 
             $preparedLine = $this->prepareLine($company, $date, $label, $line, $accounts, $lineErrors);
+
+            if ($lineErrors !== []) {
+                $errors = array_merge_recursive($errors, $lineErrors);
+
+                continue;
+            }
+
+            /*
+             * Phase 17: analytical metadata. Validated here, alongside the
+             * currency and structural rules, so that one submission surfaces
+             * every problem a line has - a value that does not belong to its
+             * dimension is as visible in one pass as an unbalanced entry.
+             */
+            $preparedLine['dimensions'] = $this->dimensions->resolve(
+                $company,
+                $line['dimensions'] ?? [],
+                "{$label}.dimensions",
+                $lineErrors,
+            );
 
             if ($lineErrors !== []) {
                 $errors = array_merge_recursive($errors, $lineErrors);
@@ -672,6 +693,27 @@ class JournalService
             // journal_id is not fillable: a line belongs to the journal being
             // written, never to one the caller names.
             $journalLine->forceFill(['journal_id' => $journal->getKey()])->save();
+
+            $this->replaceLineDimensions($journalLine, $line['dimensions'] ?? []);
+        }
+    }
+
+    /**
+     * Persist a line's dimension associations, replacing whatever was there.
+     *
+     * Lines are deleted and recreated on every draft edit, so the association
+     * rows go with them (the FK cascades); this delete is a safety net for any
+     * future caller that reuses a line, keeping the method self-contained.
+     */
+    private function replaceLineDimensions(JournalLine $line, array $assignments): void
+    {
+        $line->journalLineDimensions()->delete();
+
+        foreach ($assignments as $assignment) {
+            $line->journalLineDimensions()->create([
+                'financial_dimension_id' => $assignment['financial_dimension_id'],
+                'financial_dimension_value_id' => $assignment['financial_dimension_value_id'],
+            ]);
         }
     }
 

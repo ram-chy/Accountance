@@ -3,6 +3,7 @@
 namespace App\Http\Resources;
 
 use App\Models\JournalLine;
+use App\Models\JournalLineDimension;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
@@ -37,6 +38,21 @@ class JournalLineResource extends JsonResource
             'exchange_rate' => $this->exchange_rate,
             'foreign_debit' => $this->foreign_debit === null ? null : (string) $this->foreign_debit,
             'foreign_credit' => $this->foreign_credit === null ? null : (string) $this->foreign_credit,
+
+            /*
+             * Phase 17: the analytical labels on the line, each one a single
+             * value for one dimension, e.g. one cost center. Absent (empty array)
+             * when the line carries no labels.
+             */
+            'dimensions' => $this->whenLoaded(
+                'journalLineDimensions',
+                fn () => $this->journalLineDimensions->map(
+                    fn (JournalLineDimension $link) => [
+                        'dimension_id' => (int) $link->financial_dimension_id,
+                        'value_id' => (int) $link->financial_dimension_value_id,
+                    ]
+                )->values(),
+            ),
         ];
     }
 }

@@ -5,6 +5,7 @@ namespace App\Services\Accounting\Reports;
 use App\Enums\AccountType;
 use App\Models\Account;
 use App\Models\Company;
+use App\Services\Accounting\Dimensions\DimensionFilter;
 use App\Services\Accounting\LedgerService;
 use App\Support\Money;
 use Illuminate\Database\Query\Builder;
@@ -60,9 +61,9 @@ abstract class JournalReportService
      *
      * @return Collection<int, array{debit: Money, credit: Money}>
      */
-    protected function totalsByAccount(Company $company, ?Carbon $from, ?Carbon $to): Collection
+    protected function totalsByAccount(Company $company, ?Carbon $from, ?Carbon $to, ?DimensionFilter $filter = null): Collection
     {
-        return $this->ledger->postedTotalsByAccount($company, $from, $to);
+        return $this->ledger->postedTotalsByAccount($company, $from, $to, $filter);
     }
 
     /**

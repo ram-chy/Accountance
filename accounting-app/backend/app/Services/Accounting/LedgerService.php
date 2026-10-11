@@ -5,6 +5,7 @@ namespace App\Services\Accounting;
 use App\Enums\JournalStatus;
 use App\Models\Account;
 use App\Models\Company;
+use App\Services\Accounting\Dimensions\DimensionFilter;
 use App\Support\Money;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Carbon;
@@ -161,9 +162,9 @@ class LedgerService
      *
      * @return Collection<int, array{debit: Money, credit: Money}>
      */
-    public function postedTotalsByAccount(Company $company, ?Carbon $from, ?Carbon $to): Collection
+    public function postedTotalsByAccount(Company $company, ?Carbon $from, ?Carbon $to, ?DimensionFilter $filter = null): Collection
     {
-        return $this->postedLinesQuery($company->getKey())
+        return $this->postedLinesQuery($company->getKey(), $filter)
             ->when($from, fn (Builder $q) => $q->whereDate('journals.journal_date', '>=', $from->toDateString()))
             ->when($to, fn (Builder $q) => $q->whereDate('journals.journal_date', '<=', $to->toDateString()))
             ->groupBy('journal_lines.account_id')
@@ -191,13 +192,20 @@ class LedgerService
      * general-ledger and cash/bank reports need the identical posted-only,
      * company-scoped base query, and the rule that drafts are invisible must
      * live in one place.
+     *
+     * An optional dimension filter narrows the lines to those carrying a
+     * dimension label. It is a derivation over the same rows, never a stored
+     * total, so the dimension-aware reports stay reconcilable with the
+     * unfiltered ones by construction (Phase 17 §18).
      */
-    public function postedLinesQuery(int $companyId): Builder
+    public function postedLinesQuery(int $companyId, ?DimensionFilter $filter = null): Builder
     {
-        return DB::table('journal_lines')
+        $query = DB::table('journal_lines')
             ->join('journals', 'journals.id', '=', 'journal_lines.journal_id')
             ->where('journals.company_id', $companyId)
             ->where('journals.status', JournalStatus::Posted->value);
+
+        return $filter?->apply($query) ?? $query;
     }
 
     /**

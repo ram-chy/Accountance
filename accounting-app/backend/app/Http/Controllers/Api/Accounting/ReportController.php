@@ -106,6 +106,7 @@ class ReportController extends Controller
                 $this->companyContext->getOrFail(),
                 $request->fromDate(),
                 $request->toDate(),
+                $request->dimensionFilter(),
             )
         );
     }

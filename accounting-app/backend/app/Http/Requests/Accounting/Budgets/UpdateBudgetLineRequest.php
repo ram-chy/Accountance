@@ -32,6 +32,16 @@ class UpdateBudgetLineRequest extends FormRequest
             'accounting_period_id' => $this->sometimesCompanyPeriodRule(),
             'amount' => $this->nonNegativeMoneyRule(),
             'description' => ['nullable', 'string', 'max:500'],
+
+            /*
+             * Phase 17: when present, even as an empty array, `dimensions`
+             * replaces the line's whole analytical metadata - clearing is an
+             * explicit "remove the label", not an omission.
+             */
+            'dimensions' => ['sometimes', 'array'],
+            'dimensions.*' => ['required', 'array'],
+            'dimensions.*.dimension_id' => ['required', 'integer'],
+            'dimensions.*.value_id' => ['required', 'integer'],
         ];
     }
 }

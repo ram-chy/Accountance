@@ -7,6 +7,7 @@ use App\Models\Account;
 use App\Models\Budget;
 use App\Models\BudgetLine;
 use App\Models\Company;
+use App\Services\Accounting\Dimensions\DimensionFilter;
 use App\Services\Accounting\Reports\JournalReportService;
 use App\Support\Money;
 use Illuminate\Support\Carbon;
@@ -47,13 +48,32 @@ class BudgetVarianceReportService extends JournalReportService
     /**
      * @return array<string, mixed>
      */
-    public function generate(Budget $budget, Company $company): array
+    public function generate(Budget $budget, Company $company, ?DimensionFilter $filter = null): array
     {
-        $budget->loadMissing(['financialYear', 'lines.account', 'lines.accountingPeriod']);
+        $budget->loadMissing([
+            'financialYear',
+            'lines.account',
+            'lines.accountingPeriod',
+            'lines.budgetLineDimensions',
+        ]);
 
-        $lines = $budget->lines;
+        /*
+         * Phase 17: when a dimension is asked for, both sides of the comparison
+         * are scoped by the same label - the plan lines that carry it, against
+         * the posted ledger lines that carry it. A line without the label drops
+         * out of the view; it still exists in the approved plan, it is just not
+         * part of this dimension's variance.
+         */
+        $lines = $budget->lines
+            ->filter(fn (BudgetLine $line) => $filter?->matches($line->budgetLineDimensions->all()) ?? true);
 
-        return $this->build($budget, $company, $lines, $this->totalsByPeriod($company, $lines));
+        return $this->build(
+            $budget,
+            $company,
+            $lines,
+            $this->totalsByPeriod($company, $lines, $filter),
+            $filter,
+        );
     }
 
     /**
@@ -64,7 +84,7 @@ class BudgetVarianceReportService extends JournalReportService
      * @param  array<int, Collection<int, array{debit: Money, credit: Money}>>  $totalsByPeriod
      * @return array<string, mixed>
      */
-    private function build(Budget $budget, Company $company, Collection $lines, array $totalsByPeriod): array
+    private function build(Budget $budget, Company $company, Collection $lines, array $totalsByPeriod, ?DimensionFilter $filter = null): array
     {
         $rows = [];
         $revenueBudget = Money::zero();
@@ -125,7 +145,7 @@ class BudgetVarianceReportService extends JournalReportService
 
         $year = $budget->financialYear;
 
-        return [
+        $report = [
             'budget' => [
                 'id' => $budget->getKey(),
                 'code' => $budget->code,
@@ -169,6 +189,12 @@ class BudgetVarianceReportService extends JournalReportService
             ],
             'lines' => $rows,
         ];
+
+        if ($filter?->isActive()) {
+            $report['dimension_filter'] = $filter->echo();
+        }
+
+        return $report;
     }
 
     /**
@@ -178,7 +204,7 @@ class BudgetVarianceReportService extends JournalReportService
      * @param  Collection<int, BudgetLine>  $lines
      * @return array<int, Collection<int, array{debit: Money, credit: Money}>>
      */
-    private function totalsByPeriod(Company $company, Collection $lines): array
+    private function totalsByPeriod(Company $company, Collection $lines, ?DimensionFilter $filter = null): array
     {
         $totals = [];
 
@@ -189,6 +215,7 @@ class BudgetVarianceReportService extends JournalReportService
                 $company,
                 Carbon::instance($period->start_date)->startOfDay(),
                 Carbon::instance($period->end_date)->startOfDay(),
+                $filter,
             );
         }
 

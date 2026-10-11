@@ -9,6 +9,7 @@ use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 /**
  * One side of one account within a journal.
@@ -54,6 +55,11 @@ class JournalLine extends Model
         return [
             'line_number' => 'integer',
         ];
+    }
+
+    public function journalLineDimensions(): HasMany
+    {
+        return $this->hasMany(JournalLineDimension::class, 'journal_line_id');
     }
 
     public function journal(): BelongsTo

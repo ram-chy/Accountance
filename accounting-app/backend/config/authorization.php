@@ -125,6 +125,12 @@ return [
         'accounting.budgets.update',
         'accounting.budgets.delete',
         'accounting.budgets.approve',
+
+        // Phase 17
+        'accounting.dimensions.view',
+        'accounting.dimensions.create',
+        'accounting.dimensions.update',
+        'accounting.dimensions.delete',
     ],
 
     'roles' => [
@@ -259,6 +265,23 @@ return [
             'accounting.budgets.create',
             'accounting.budgets.update',
             'accounting.budgets.delete',
+
+            /*
+            | Phase 17. The Accountant maintains the company's dimensions: reading
+            | them, adding one, renaming one and retiring one. This is the same
+            | trust as maintaining the chart of accounts - a dimension decides how
+            | every report will be cut from now on, and it is configured by the
+            | person who configures the accounts those reports read.
+            |
+            | Values are covered by these four grants rather than a second set:
+            | they are addressed under their dimension and inherit its company, so
+            | there is no action on a value that is not the same action on its
+            | parent.
+            */
+            'accounting.dimensions.view',
+            'accounting.dimensions.create',
+            'accounting.dimensions.update',
+            'accounting.dimensions.delete',
         ],
 
         /*
@@ -358,6 +381,16 @@ return [
             */
             'accounting.budgets.view',
             'accounting.budgets.approve',
+
+            /*
+            | Phase 17, read-only, exactly as Manager is treated for every other
+            | accounting module. It reads the dimensions the reports it is already
+            | allowed to run are cut along, and may not create, rename or retire
+            | one: a dimension is configuration that decides how future reports
+            | will be presented, the same kind of decision as an account's type,
+            | which Manager also holds no grant over.
+            */
+            'accounting.dimensions.view',
         ],
 
         /*
@@ -390,6 +423,12 @@ return [
         | reads over the company's foreign-currency positions, which are
         | components of the same accounting truth Staff is already denied, and
         | currency master data is system configuration.
+        |
+        | Phase 17 adds nothing. A dimension and its values are the axes every
+        | financial report is cut along, so reading the list of cost centres is
+        | reading a map of how the company organises the very figures Staff is
+        | denied elsewhere - and maintaining one would let a user who cannot post
+        | a journal decide how journals are analysed.
         */
         'Staff' => [
             'companies.view',

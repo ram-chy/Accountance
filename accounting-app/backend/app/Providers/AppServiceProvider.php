@@ -14,6 +14,7 @@ use App\Models\Currency;
 use App\Models\Customer;
 use App\Models\CustomerReceipt;
 use App\Models\ExchangeRate;
+use App\Models\FinancialDimension;
 use App\Models\FinancialYear;
 use App\Models\FixedAsset;
 use App\Models\FixedAssetCategory;
@@ -37,6 +38,7 @@ use App\Policies\CurrencyPolicy;
 use App\Policies\CustomerPolicy;
 use App\Policies\CustomerReceiptPolicy;
 use App\Policies\ExchangeRatePolicy;
+use App\Policies\FinancialDimensionPolicy;
 use App\Policies\FixedAssetCategoryPolicy;
 use App\Policies\FixedAssetPolicy;
 use App\Policies\JournalPolicy;
@@ -203,7 +205,22 @@ class AppServiceProvider extends ServiceProvider
         Gate::policy(Budget::class, BudgetPolicy::class);
 
         /*
-         | Accounting route binding.
+         | Phase 17 policy.
+         |
+         | One policy for a dimension AND its values, because a value is always
+         | addressed under its dimension and cannot be created, edited or retired
+         | by anyone who may not do the same to the parent. Registering a second
+         | policy for FinancialDimensionValue would decide the same four questions
+         | twice and the two would drift apart.
+         |
+         | Registered explicitly, as every phase since Phase 4 has done: a policy
+         | discovered by naming convention stops being applied the moment the class
+         | is renamed or moved, and the failure is silent.
+         */
+        Gate::policy(FinancialDimension::class, FinancialDimensionPolicy::class);
+
+        /*
+        | Accounting route binding.
          |
          | Registered here rather than in each controller so the tenant check
          | cannot be forgotten on a future accounting endpoint. It resolves the
@@ -319,6 +336,17 @@ class AppServiceProvider extends ServiceProvider
          | through their budget in the controller instead.
          */
         $scoped('budget', Budget::class);
+
+        /*
+        | Phase 17. A dimension carries company_id, so the same property holds: a
+        | dimension reaching a controller is already known to belong to the active
+        | company, and a foreign id 404s before any method runs. Values are
+        | deliberately NOT bound here - they have no company_id, so a binding by
+        | primary key could resolve another company's row - and are resolved
+        | through their dimension in the controller instead, exactly as budget
+        | lines are resolved through their budget.
+        */
+        $scoped('dimension', FinancialDimension::class);
     }
 
     /**

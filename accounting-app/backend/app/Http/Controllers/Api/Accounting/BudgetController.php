@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api\Accounting;
 
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Accounting\Budgets\BudgetFilterRequest;
+use App\Http\Requests\Accounting\Budgets\BudgetVarianceRequest;
 use App\Http\Requests\Accounting\Budgets\ReviseBudgetRequest;
 use App\Http\Requests\Accounting\Budgets\StoreBudgetLineRequest;
 use App\Http\Requests\Accounting\Budgets\StoreBudgetRequest;
@@ -163,13 +164,17 @@ class BudgetController extends Controller
         );
     }
 
-    public function variance(Request $request, Budget $budget): JsonResponse
+    public function variance(BudgetVarianceRequest $request, Budget $budget): JsonResponse
     {
         $this->authorize('view', $budget);
 
         return ApiResponse::success(
             message: 'Budget variance report generated successfully.',
-            data: $this->variance->generate($budget, $this->companyContext->getOrFail()),
+            data: $this->variance->generate(
+                $budget,
+                $this->companyContext->getOrFail(),
+                $request->dimensionFilter(),
+            ),
         );
     }
 
@@ -184,7 +189,7 @@ class BudgetController extends Controller
 
         return ApiResponse::success(
             message: 'Budget line created successfully.',
-            data: new BudgetLineResource($line->load('account', 'accountingPeriod')),
+            data: new BudgetLineResource($line->load('account', 'accountingPeriod', 'budgetLineDimensions')),
             status: 201,
         );
     }
@@ -203,7 +208,7 @@ class BudgetController extends Controller
 
         return ApiResponse::success(
             message: 'Budget line updated successfully.',
-            data: new BudgetLineResource($updated->load('account', 'accountingPeriod')),
+            data: new BudgetLineResource($updated->load('account', 'accountingPeriod', 'budgetLineDimensions')),
         );
     }
 
@@ -231,7 +236,7 @@ class BudgetController extends Controller
     {
         return $budget
             ->load('financialYear')
-            ->load('lines.account', 'lines.accountingPeriod')
+            ->load('lines.account', 'lines.accountingPeriod', 'lines.budgetLineDimensions')
             ->loadCount('lines');
     }
 }

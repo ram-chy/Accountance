@@ -3,6 +3,7 @@
 namespace App\Http\Resources;
 
 use App\Models\BudgetLine;
+use App\Models\BudgetLineDimension;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
@@ -36,6 +37,20 @@ class BudgetLineResource extends JsonResource
 
             'account' => new AccountResource($this->whenLoaded('account')),
             'accounting_period' => new AccountingPeriodResource($this->whenLoaded('accountingPeriod')),
+
+            /*
+             * Phase 17: the analytical labels on the plan line, one value per
+             * dimension type. Empty when the line carries no labels.
+             */
+            'dimensions' => $this->whenLoaded(
+                'budgetLineDimensions',
+                fn () => $this->budgetLineDimensions->map(
+                    fn (BudgetLineDimension $link) => [
+                        'dimension_id' => (int) $link->financial_dimension_id,
+                        'value_id' => (int) $link->financial_dimension_value_id,
+                    ]
+                )->values(),
+            ),
 
             'created_at' => $this->created_at?->toIso8601String(),
             'updated_at' => $this->updated_at?->toIso8601String(),
