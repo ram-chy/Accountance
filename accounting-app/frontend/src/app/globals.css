@@ -1,0 +1,194 @@
+@import "tailwindcss";
+
+/*
+ | Theme switching is class-based (`.dark` on <html>), not purely media-query
+ | based, so the user can override the system preference. The inline script in
+ * layout.tsx sets the class before first paint to avoid a theme flash.
+ */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/*
+ * Design tokens.
+ *
+ * Raw values live on :root / .dark as plain CSS variables; the @theme inline
+ * block below maps them to Tailwind utilities (bg-surface, text-foreground,
+ * border-border, ...). Because the utilities reference the variables, flipping
+ * the .dark class re-themes every component without touching component code.
+ *
+ * Light palette and Dark palette are the Phase 0 brand tokens; semantic
+ * success/warning/danger/info sets are defined separately from the brand green
+ * so meaning is never inferred from the brand colour.
+ */
+:root {
+  --background: #f7f9f7;
+  --surface: #ffffff;
+  --surface-muted: #f1f4f2;
+  --border: #e5eae5;
+  --border-strong: #cfd8d0;
+  --foreground: #26332b;
+  --muted-foreground: #647067;
+
+  --primary: #2e7d32;
+  --primary-strong: #1b5e20;
+  --primary-subtle: #e8f5e9;
+  --on-primary: #ffffff;
+
+  --ring: #2e7d32;
+  --disabled-bg: #eef1ef;
+  --disabled-fg: #9aa69e;
+
+  --success: #16a34a;
+  --success-foreground: #ffffff;
+  --success-soft: #dcfce7;
+  --success-soft-foreground: #166534;
+  --success-border: #bbf7d0;
+
+  --warning: #d97706;
+  --warning-foreground: #ffffff;
+  --warning-soft: #fef3c7;
+  --warning-soft-foreground: #92400e;
+  --warning-border: #fde68a;
+
+  --danger: #dc2626;
+  --danger-foreground: #ffffff;
+  --danger-soft: #fee2e2;
+  --danger-soft-foreground: #991b1b;
+  --danger-border: #fecaca;
+
+  --info: #2563eb;
+  --info-foreground: #ffffff;
+  --info-soft: #dbeafe;
+  --info-soft-foreground: #1e40af;
+  --info-border: #bfdbfe;
+
+  color-scheme: light;
+}
+
+.dark {
+  --background: #111713;
+  --surface: #1b241d;
+  --surface-muted: #202a22;
+  --border: #2a382d;
+  --border-strong: #3a4a3e;
+  --foreground: #e5eee6;
+  --muted-foreground: #9fb2a4;
+
+  --primary: #81c784;
+  --primary-strong: #a5d6a7;
+  --primary-subtle: #1e2a21;
+  --on-primary: #0b120d;
+
+  --ring: #81c784;
+  --disabled-bg: #232c25;
+  --disabled-fg: #6b7a6e;
+
+  --success: #4ade80;
+  --success-foreground: #052e16;
+  --success-soft: #0f2a1a;
+  --success-soft-foreground: #86efac;
+  --success-border: #166534;
+
+  --warning: #fbbf24;
+  --warning-foreground: #3b2406;
+  --warning-soft: #33260a;
+  --warning-soft-foreground: #fde68a;
+  --warning-border: #854d0e;
+
+  --danger: #f87171;
+  --danger-foreground: #450a0a;
+  --danger-soft: #33100f;
+  --danger-soft-foreground: #fca5a5;
+  --danger-border: #991b1b;
+
+  --info: #60a5fa;
+  --info-foreground: #082f49;
+  --info-soft: #0f2233;
+  --info-soft-foreground: #93c5fd;
+  --info-border: #1d4ed8;
+
+  color-scheme: dark;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-surface: var(--surface);
+  --color-surface-muted: var(--surface-muted);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-foreground: var(--foreground);
+  --color-muted-foreground: var(--muted-foreground);
+
+  --color-primary: var(--primary);
+  --color-primary-strong: var(--primary-strong);
+  --color-primary-subtle: var(--primary-subtle);
+  --color-on-primary: var(--on-primary);
+
+  --color-ring: var(--ring);
+  --color-disabled: var(--disabled-bg);
+  --color-disabled-foreground: var(--disabled-fg);
+
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-success-soft: var(--success-soft);
+  --color-success-soft-foreground: var(--success-soft-foreground);
+  --color-success-border: var(--success-border);
+
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-warning-soft: var(--warning-soft);
+  --color-warning-soft-foreground: var(--warning-soft-foreground);
+  --color-warning-border: var(--warning-border);
+
+  --color-danger: var(--danger);
+  --color-danger-foreground: var(--danger-foreground);
+  --color-danger-soft: var(--danger-soft);
+  --color-danger-soft-foreground: var(--danger-soft-foreground);
+  --color-danger-border: var(--danger-border);
+
+  --color-info: var(--info);
+  --color-info-foreground: var(--info-foreground);
+  --color-info-soft: var(--info-soft);
+  --color-info-soft-foreground: var(--info-soft-foreground);
+  --color-info-border: var(--info-border);
+
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+}
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    background-color: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+    border-radius: 0.25rem;
+  }
+
+  ::selection {
+    background: var(--primary-subtle);
+    color: var(--foreground);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
