@@ -31,6 +31,17 @@ export type ApiFetchOptions = {
   headers?: Record<string, string>;
   query?: QueryParams;
   signal?: AbortSignal;
+  /**
+   * Overrides the configured base URL for this request only.
+   *
+   * - Omitting it uses `NEXT_PUBLIC_API_BASE_URL` (the Laravel API), preserving
+   *   the Phase 1 behaviour.
+   * - Passing `""` targets the current origin, which is how the browser reaches
+   *   the same-origin BFF session endpoints (`/api/session/*`).
+   * - Passing an absolute URL targets a server-only Laravel origin (used by the
+   *   BFF when it talks to the backend).
+   */
+  baseUrl?: string;
 };
 
 function buildQueryString(query?: QueryParams): string {
@@ -59,9 +70,9 @@ function buildQueryString(query?: QueryParams): string {
   return serialised ? `?${serialised}` : "";
 }
 
-function resolveUrl(path: string, query?: QueryParams): string {
+function resolveUrl(baseUrl: string, path: string, query?: QueryParams): string {
   const normalisedPath = path.startsWith("/") ? path : `/${path}`;
-  return `${API_BASE_URL}${normalisedPath}${buildQueryString(query)}`;
+  return `${baseUrl}${normalisedPath}${buildQueryString(query)}`;
 }
 
 function extractRequestId(response: Response): string | undefined {
@@ -99,7 +110,9 @@ export async function apiFetch<T>(
   path: string,
   options: ApiFetchOptions = {},
 ): Promise<T> {
-  if (!isApiConfigured) {
+  const baseUrl = options.baseUrl ?? API_BASE_URL;
+
+  if (options.baseUrl === undefined && !isApiConfigured) {
     throw new ApiError({
       status: 0,
       isNetworkError: true,
@@ -128,7 +141,7 @@ export async function apiFetch<T>(
   let response: Response;
 
   try {
-    response = await fetch(resolveUrl(path, options.query), {
+    response = await fetch(resolveUrl(baseUrl, path, options.query), {
       method: options.method ?? (body ? "POST" : "GET"),
       headers,
       body,

@@ -18,7 +18,9 @@ that need user sign-off are marked **[APPROVAL]**.
 - **Tailwind CSS v4** (CSS-first `@theme`; no `tailwind.config.js` needed). The
   backend already uses Tailwind v4 in its Vite asset pipeline, so the team is
   already on v4.
-- **Recharts** for dashboard charts (locked decision).
+- **Charts are hand-rolled SVG** (Phase 4 decision): the dashboard only needs
+  simple bar/breakdown charts, so no charting dependency was adopted (Recharts
+  is no longer planned). See `FRONTEND_PHASE_4_REPORT.md`.
 - API-driven: Laravel owns accounting logic, calculations, authorization and
   validation. **The frontend never computes an authoritative balance or posts an
   entry itself.**
@@ -58,13 +60,18 @@ src/app/
     verify-email/page.tsx
     layout.tsx                    # minimal, no app chrome
 
-  (app)/
-    layout.tsx                    # protected shell: sidebar + topbar + company switcher
-    dashboard/page.tsx
+    (app)/
+      layout.tsx                    # protected shell: sidebar + topbar + company switcher
+      page.tsx                      # dashboard (home route, Phase 4)
+      accounts/                     # chart of accounts (Phase 5, at /accounts)
+      journals/                     # journal entries (Phase 6, at /journals)
+      cash-bank/                    # cash & banking (Phase 7, at /cash-bank)
+        page.tsx                    # overview: classified accounts + ledger balances
+        transactions/page.tsx       # transaction list (+filtered by ?account_id)
 
     accounting/
-      accounts/…                  # chart of accounts
-      journals/…
+      # accounts moved to /accounts (Phase 5); journals moved to /journals
+      # (Phase 6); remaining modules below
       periods/…
       reports/
         trial-balance/…
@@ -82,7 +89,6 @@ src/app/
     sales/…                       # customers, invoices, receipts
     purchases/…                   # suppliers, bills, payments
     credit-debit-notes/…
-    cash-bank/…
     bank-reconciliations/…
     fixed-assets/…
     companies/…  company/settings/…
@@ -95,32 +101,28 @@ src/app/
     backend/[...path]/route.ts    # authenticated proxy to Laravel
 ```
 
-Feature-source layout (co-located, feature-oriented):
+Feature-source layout (co-located, feature-oriented). As implemented in Phases
+1–5, feature code lives under `src/lib/<feature>/` (data layer) and
+`src/components/<feature>/` (UI) rather than a single `src/features/` folder:
 
 ```
 src/
   app/                            # routing + page composition only
-  features/
-    accounts/                     # api.ts, types.ts, components/, hooks/
-    journals/
-    reports/
-    budgets/
-    …                             # one folder per accounting module
-  components/
-    ui/                           # dumb, reusable primitives (Button, Input…)
-    app/                          # shell: Sidebar, Topbar, CompanySwitcher, PageHeader
-    data/                         # DataTable, Pagination, EmptyState, ErrorState, Skeleton
-    charts/                       # Recharts wrappers + theming
   lib/
     api/                          # fetch client, envelope, pagination adapter, ApiError
-    auth/                         # server session helpers (cookie)
-    company/                      # active-company context
-    format/                       # money, dates, numbers (decimal-safe)
-    permissions/                  # capability helpers + nav gating
-  config/
-    nav.ts                        # navigation model with required capabilities
-  styles/
-  types/
+    accounts/                     # types.ts, api.ts, validators.ts, use-*.ts (+ tests)
+    dashboard/                    # same shape (Phase 4)
+    journals/                     # data layer (Phase 6)
+    cash-bank/                    # data layer (Phase 7): accounts, transactions, balances
+    …
+    auth/  permissions/  navigation/   # session helpers, capability utils, nav model
+  components/
+    ui/                           # dumb, reusable primitives (Button, Input, Dialog…)
+    accounts/                     # feature UI (view, table, dialogs)
+    dashboard/                    # feature UI (Phase 4)
+    journals/                     # feature UI (Phase 6)
+    cash-bank/                    # feature UI (Phase 7)
+    app/                          # shell: Sidebar, Topbar, CompanySwitcher, PageHeader
 ```
 
 **Rule:** add a feature folder only when its phase starts. Do not pre-create
@@ -278,10 +280,12 @@ brand colour:
 
 ---
 
-## 6. Authentication and company context **[APPROVAL — key decision]**
+## 6. Authentication and company context **[DECIDED — implemented in Phase 2]**
 
 The backend is **bearer-JWT with no refresh endpoint and no cookie support**. Per
-the brief, tokens must not go to `localStorage` by default. Recommended pattern:
+the brief, tokens must not go to `localStorage` by default. **Decision: the BFF +
+httpOnly session cookie pattern (§6.1) is adopted and implemented in Phase 2** —
+see `FRONTEND_PHASE_2_REPORT.md`.
 
 ### 6.1 Recommended: Next.js BFF with an httpOnly session cookie
 
@@ -312,6 +316,34 @@ Browser ──(fetch, no token)──▶ Next route handler ──(Bearer JWT)�
 - Token expiry (60 min): the handler maps Laravel 401 → clear cookie → client
   re-authenticates. No silent refresh exists, so a periodic `/session/me` ping or
   a 401-on-next-action is the trigger.
+
+**Phase 2 status:** implemented `POST /api/session/{login,logout}`, `GET
+/api/session/me`, and `POST /api/session/company` (`app/api/session/*`). The JWT
+is sealed with Web Crypto AES-256-GCM into the `accountance_session` cookie
+(`HttpOnly`, `Secure` in production, `SameSite=Lax`); the browser client reaches
+the BFF through the existing `apiFetch` (`baseUrl: ""`) — no token is ever sent
+to the browser. `GET /api/session/me` also re-points the cookie if the stored
+company is no longer a valid active membership. The token strategy is fixed, so
+no backend change was required.
+
+**Phase 3 status (implemented):** the catch-all forwarding proxy
+`app/api/backend/[...path]/route.ts` now exists and completes the model above.
+Policy lives in the pure, unit-tested `lib/api/proxy-policy.ts`: an allow-list of
+HTTP methods (`GET/POST/PUT/PATCH/DELETE`) and route families taken from the
+verified `routes/api.php`; `auth/*`, `health`, `password/*` and the raw
+`companies/{id}/switch` are **not** reachable. Path segments are validated
+(rejecting `.`/`..`, percent-encoding, backslashes, control chars, overlong or
+over-count segments) and a rejection is always a 404 so probing reveals nothing.
+`Authorization` (from the cookie) and `X-Company-Id` (from the server-side active
+company) are injected server-side and can never be supplied or overridden by the
+browser; `Cookie`, `X-Company-Id`, `Authorization` and `Host` from the client are
+dropped. Company-scoped families require an active company and otherwise fail
+with `409` rather than letting Laravel fall back to the user's default. An
+upstream `401` clears the BFF session; every other status (including Laravel's
+`422` validation errors and `403`/`404`) is passed through, with `X-Request-Id`
+preserved and `Set-Cookie`/`Location` stripped. The browser reaches it through
+`lib/api/backend.ts` (`backendGet/Post/Put/Patch/Delete`), which shares the
+central 401 handler with the session client. See `FRONTEND_PHASE_3_REPORT.md`.
 
 ### 6.2 Alternative: in-memory token (simpler, worse UX)
 
@@ -443,6 +475,26 @@ per-period calls behind a clearly-labelled "may be incomplete" behaviour.
 - **Cash & bank** reports reflect actual money movements.
 - Label charts accordingly; never present accrual profit as "cash".
 
+### 9.5 Phase 4 status (implemented)
+
+The authenticated dashboard is implemented at the `(app)` home route
+(`src/app/(app)/page.tsx` → `DashboardView`). It shows cash & bank balance,
+receivables, payables, income, expenses, net profit/loss, an income-vs-expenses
+chart, an expense breakdown and a recent-activity list, all from the sources in
+§9.1 and only for slices the user's role may read. Two documented gaps are
+worked around with the bounded approaches §9.2 permits:
+
+- **Income-vs-expenses trend:** derived from per-month `profit-loss` calls,
+  capped at the 12 most recent months of the selected window (`MAX_TREND_MONTHS`)
+  and labelled when the window was trimmed.
+- **Cash & bank total:** summed client-side from per-account ledger balances
+  (needs `accounting.cash_bank.view` + `accounting.ledger.view`) using BigInt
+  fixed-point arithmetic — no floating-point money math.
+
+Charts are hand-rolled SVG. Figures are validated at runtime and rendered from
+their original decimal strings. All requests go through the Phase 3 proxy via
+`backendGet`; a `401` follows the central session flow.
+
 ---
 
 ## 10. Tables, filtering, sorting, pagination
@@ -460,8 +512,9 @@ per-period calls behind a clearly-labelled "may be incomplete" behaviour.
 
 ## 11. Charts
 
-- Recharts wrappers only; theme colours read from CSS variables so charts follow
-  light/dark automatically.
+- Charts are hand-rolled SVG components (`src/components/dashboard/*chart*.tsx`)
+  as of Phase 4; colours are read from CSS variables so they follow light/dark
+  automatically. No charting library is used.
 - Money axes/labels formatted with the decimal-safe formatter.
 - Accessible fallback: provide a data table / summary alongside or behind a
   toggle; do not rely on colour alone.
@@ -479,7 +532,7 @@ per-period calls behind a clearly-labelled "may be incomplete" behaviour.
   migrations/seeders in this phase.
 - **Quality gates (exact commands, run in `accounting-app/frontend`):**
   - `npm run lint`
-  - `npm run typecheck` (`tsc --noEmit`)
+  - `npx tsc --noEmit` (`package.json` has no `typecheck` script)
   - `npm run test`
   - `npm run build`
   These must pass before a frontend phase is considered complete.
@@ -492,8 +545,8 @@ Server-only (never exposed to the browser):
 
 | Name | Purpose |
 |---|---|
-| `API_BASE_URL` | Laravel base URL incl. `/api` (e.g. `http://127.0.0.1:8000/api`) |
-| `SESSION_COOKIE_SECRET` | signs/encrypts the session cookie |
+| `API_BASE_URL` | Laravel base URL incl. `/api` (e.g. `http://127.0.0.1:8000/api`). Falls back to `NEXT_PUBLIC_API_BASE_URL` when unset. |
+| `SESSION_COOKIE_SECRET` | signs/encrypts the session cookie (AES-256-GCM; **required in production**, min 16 chars) |
 | `SESSION_COOKIE_NAME` | optional override |
 
 Public (browser-safe) — only non-sensitive values:
@@ -528,17 +581,56 @@ receipts/payments → cash/bank → reconciliation → tax → adjustments → f
 → currencies → budgets/dimensions), with the dashboard last once its data sources
 are confirmed (blueprint §9).
 
+**Status (as of Phase 7):** shipped — foundation/shell/auth/company context
+(Phases 1–2), accounts (Phase 5), journals (Phase 6), cash & banking (Phase 7);
+dashboard implemented in Phase 4. Still to build — periods, reports,
+customers/suppliers, invoices/bills, notes, receipts/payments, reconciliation,
+tax, adjustments, fixed assets, currencies, budgets/dimensions.
+
 ---
 
 ## 15. Open decisions (needs approval)
 
 1. **Token storage:** BFF + httpOnly cookie (recommended) vs in-memory token.
+   — **DECIDED (Phase 2): BFF + encrypted httpOnly cookie.**
 2. **App location:** `accounting-app/frontend` (recommended) vs elsewhere.
 3. **Data layer:** TanStack Query (recommended) vs hand-rolled hooks.
+   — **DECIDED (Phases 3–6): hand-rolled hooks** (company-keyed runs +
+   `AbortController`); revisit if a screen needs cross-screen caching.
 4. **Forms:** react-hook-form + zod (recommended) vs native controlled forms.
+   — **DECIDED (Phases 2–6): native controlled components** + small validators.
 5. **Headless UI library:** none initially (recommended) vs Radix/Headless UI.
 6. **Theme:** next-themes (recommended) vs custom provider.
-7. **Trend charts:** defer until a trends API exists (recommended) vs bounded
-   per-period calls.
+7. **Trend charts:** **DECIDED (Phase 4): bounded per-month P&L calls** (max 12
+   months, newest first), labelled when trimmed; revisit if a trends API ships.
 8. **Backend follow-up (not frontend scope):** adopt pagination metadata
    (P2-1) and a consistent `per_page` cap.
+9. **Accounts route/layout:** **DECIDED (Phase 5):** Chart of Accounts lives at
+   `/accounts` with feature code in `src/lib/accounts/` + `src/components/accounts/`.
+10. **Journals route/layout:** **DECIDED (Phase 6):** Journal Entries live at
+    `/journals` with feature code in `src/lib/journals/` +
+    `src/components/journals/`. Amounts are rendered as plain decimals (no
+    currency symbol), because the session exposes no currency code
+    (`SessionCompany` carries only `settings.default_currency_id`); foreign lines
+    are labelled with their `currency_code`. The `source_type` enum mirrors the
+    backend `JournalSource` enum exactly.
+11. **Cash & banking route/layout:** **DECIDED (Phase 7):** Cash & Banking lives
+    at `/cash-bank` (overview) and `/cash-bank/transactions` with feature code in
+    `src/lib/cash-bank/` + `src/components/cash-bank/`. Classification and bank
+    details are created and edited from the chart of accounts; this module manages
+    an already-classified account and its bank-detail lifecycle. Balances come
+    from the per-account ledger read
+    (`GET /api/accounting/accounts/{account}/balance`, perm
+    `accounting.ledger.view`) and are labelled "Ledger balance"; **no company-wide
+    cash total** is shown because the account/transaction resources expose no
+    currency. The account "detail" is the manage dialog plus a transactions list
+    filtered by `?account_id` rather than a dedicated `/cash-bank/[id]` route.
+    (The Phase 4 dashboard's client-side cash aggregate of §9.5 is separate and
+    unchanged.)
+12. **`JournalSource` enum correction:** **Phase 7 fix.** Phase 6 trimmed
+    `JOURNAL_SOURCE_VALUES` to six values; the correct backend enum has **eleven**
+    (`MANUAL, ADJUSTMENT, SALES_INVOICE, PURCHASE_BILL, CUSTOMER_RECEIPT,
+    SUPPLIER_PAYMENT, CASH_BANK_TRANSACTION, CREDIT_DEBIT_NOTE, FIXED_ASSET,
+    FIXED_ASSET_DEPRECIATION, FIXED_ASSET_DISPOSAL`). `src/lib/journals/types.ts`
+    now mirrors all eleven, and the Phase 6 report §13.4 is corrected in
+    `docs/FRONTEND_PHASE_7_REPORT.md`.

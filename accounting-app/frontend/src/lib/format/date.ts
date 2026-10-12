@@ -53,6 +53,22 @@ export function formatDateOnly(
   }).format(date);
 }
 
+/**
+ * Today's calendar date as `YYYY-MM-DD` in the user's local time zone.
+ *
+ * A business date is time-zone independent, so this deliberately reads the local
+ * calendar rather than the UTC instant: a user in UTC+13 shortly after midnight
+ * should prefill today, not yesterday.
+ */
+export function todayDateOnly(): string {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+
+  return `${year}-${month}-${day}`;
+}
+
 export type FormatTimestampOptions = {
   locale?: string;
   /** IANA time zone. Defaults to UTC. */
