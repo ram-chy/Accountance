@@ -1,0 +1,1502 @@
+# PHASE 14 — MULTI-CURRENCY & FOREIGN EXCHANGE ACCOUNTING
+
+## 1. PHASE OBJECTIVE
+
+Implement the Accounting Web App's **Multi-Currency & Foreign Exchange
+Accounting** capability on top of the existing accounting architecture.
+
+The implementation must make the system capable of handling transactions
+denominated in currencies other than the company's base currency while
+preserving:
+
+- exact double-entry accounting;
+- immutable posted financial history;
+- company isolation;
+- fiscal-period controls;
+- tax snapshots;
+- existing document/accounting integrations;
+- correct foreign-currency and base-currency values;
+- historical exchange-rate integrity;
+- realized and unrealized FX handling where supported;
+- existing reporting architecture;
+- existing audit and accounting-control infrastructure.
+
+This phase must extend the existing accounting engine.
+
+**DO NOT create a second accounting engine.**
+
+The existing journal/posting/ledger architecture remains the single source of
+accounting truth.
+
+---
+
+# 2. CURRENT SYSTEM BASELINE
+
+Before changing anything, inspect the actual repository and existing
+implementation.
+
+Do not assume that the original project blueprint exactly matches the current
+codebase.
+
+The current project has already completed:
+
+- Authentication, users and roles
+- Company context and settings
+- Accounting foundation
+- Chart of accounts
+- Journal/posting engine
+- Accounting reports
+- Cash & banking
+- Bank reconciliation
+- Tax Engine
+- Credit/Debit Notes
+- Fixed Assets
+- Audit & Accounting Controls
+
+The latest verified baseline is:
+
+**947 tests / 4,624 assertions / 0 failures / 0 errors**
+
+Treat the existing implementation as authoritative.
+
+Do not rewrite working architecture merely to match this prompt.
+
+---
+
+# 3. HARD RULE — INSPECT FIRST
+
+Before implementing anything, inspect:
+
+## Currency infrastructure
+
+Search for:
+
+- currencies
+- currency_id
+- currency_code
+- base_currency
+- exchange_rate
+- exchange_rates
+- foreign_currency
+- transaction_currency
+- functional_currency
+- reporting_currency
+- Money
+- Decimal handling
+- BCMath
+- currency configuration
+- company currency settings
+
+## Accounting infrastructure
+
+Inspect:
+
+- accounts
+- journal entries
+- journal lines
+- JournalService
+- JournalPostingService
+- LedgerService
+- accounting periods
+- fiscal periods
+- reports
+- financial statements
+- customer statements
+- supplier statements
+- settlement/allocation services
+
+## Existing modules
+
+Inspect currency implications in:
+
+- Sales Invoices
+- Purchase Bills
+- Customer Payments
+- Supplier Payments
+- Expenses
+- Cash & Bank
+- Bank Reconciliation
+- Tax Engine
+- Credit/Debit Notes
+- Fixed Assets
+- reports
+
+## Existing audit/control infrastructure
+
+Inspect:
+
+- AuditLog
+- AuditService
+- AuditAction
+- AccountingControlService
+- ControlFinding
+- request correlation
+- existing immutability checks
+
+## Existing database schema
+
+Inspect actual migrations and models before designing new migrations.
+
+Particularly verify whether the existing schema already contains:
+
+- currency_id
+- exchange_rate
+- base_debit
+- base_credit
+- currency metadata
+- company base currency
+
+Do not duplicate existing fields.
+
+---
+
+# 4. HARD STOP CONDITIONS
+
+STOP and report a design conflict before implementing if:
+
+1. Existing currency fields have contradictory meanings.
+2. Existing journal lines cannot distinguish transaction currency from base
+   currency safely.
+3. Existing posted journals would need historical values rewritten.
+4. Existing reports depend on ambiguous currency values.
+5. Existing tax snapshots cannot preserve the currency/rate context required for
+   historical correctness.
+6. A second accounting balance/source-of-truth would be required.
+7. Existing company base-currency rules conflict with the proposed design.
+8. A migration would require destructive rewriting of posted financial history.
+9. Existing fixed-asset accounting cannot preserve historical currency values
+   safely.
+10. Multi-company isolation cannot be guaranteed.
+11. Existing audit/control infrastructure cannot record important currency
+    configuration/rate changes.
+12. A global model observer is required merely to make the feature work safely.
+13. The implementation would require changing already-posted journal amounts.
+14. Existing report semantics would become ambiguous between transaction
+    currency and base currency.
+
+Do not work around a hard stop silently.
+
+---
+
+# 5. ACCOUNTING CURRENCY MODEL
+
+Establish a clear distinction between:
+
+### Company Base Currency
+
+The company's accounting/functional currency.
+
+Example:
+
+Company base currency:
+
+`INR`
+
+### Transaction Currency
+
+The currency in which a business transaction is denominated.
+
+Example:
+
+Invoice:
+
+`USD`
+
+### Exchange Rate
+
+The conversion relationship between transaction currency and company base
+currency at the transaction/accounting date.
+
+Example:
+
+USD 100
+
+Exchange rate:
+
+`1 USD = 83.50 INR`
+
+Base amount:
+
+`8,350.00 INR`
+
+The exact direction of the stored exchange rate must be determined from the
+existing schema and conventions.
+
+Do not introduce two competing exchange-rate meanings.
+
+Document the chosen convention clearly.
+
+---
+
+# 6. CURRENCY MASTER
+
+If the repository does not already provide an adequate currency master,
+implement one.
+
+A currency should contain only appropriate stable metadata, such as:
+
+- id
+- ISO 4217 code
+- name
+- symbol
+- decimal precision
+- is_active
+- timestamps
+
+Use ISO currency codes.
+
+Examples:
+
+- INR
+- USD
+- EUR
+- GBP
+- JPY
+
+Do not hard-code country-specific tax rules into currency handling.
+
+Do not assume that every currency has exactly two decimal places.
+
+The currency's configured precision must be respected where appropriate.
+
+---
+
+# 7. COMPANY BASE CURRENCY
+
+Each company must have exactly one base currency.
+
+Inspect the existing company/settings implementation first.
+
+If a suitable field already exists, reuse it.
+
+If not, introduce the smallest additive schema change required.
+
+Rules:
+
+- company must always have a valid base currency once accounting is active;
+- base currency must belong to the currency master;
+- inactive currencies must not be selectable for new transactions;
+- changing a company's base currency after accounting history exists must be
+  treated as a controlled operation;
+- do not silently convert historical accounting records;
+- do not rewrite posted journal amounts.
+
+If changing the base currency is not safely supportable with the current
+architecture, prevent the change and return a clear validation error.
+
+---
+
+# 8. ACCOUNT CURRENCY
+
+Determine whether the current account model supports a currency restriction.
+
+Do not automatically force every account to have its own currency unless the
+existing architecture requires it.
+
+Distinguish between:
+
+- accounts that may operate in multiple currencies;
+- accounts restricted to one currency;
+- currency-specific bank/cash accounts where appropriate.
+
+The design must not accidentally prevent legitimate multi-currency accounting.
+
+If an account currency restriction is introduced, document exactly what it
+means.
+
+---
+
+# 9. EXCHANGE-RATE MODEL
+
+If an exchange-rate table does not already exist, implement a normalized model.
+
+Conceptually:
+
+`exchange_rates`
+
+Possible fields:
+
+- id
+- company_id if rates are company-specific
+- from_currency_id
+- to_currency_id
+- effective_date
+- rate
+- source/reference if appropriate
+- is_active if required
+- created_by
+- timestamps
+
+Do not blindly implement these exact fields.
+
+Inspect the existing architecture first.
+
+The design must support historical lookup.
+
+For example:
+
+USD → INR
+
+effective:
+
+2026-10-03
+
+rate:
+
+83.500000
+
+---
+
+# 10. EXCHANGE-RATE PRECISION
+
+Exchange rates must use exact decimal arithmetic.
+
+Never use:
+
+- FLOAT
+- DOUBLE
+- binary floating-point arithmetic
+
+Use the existing decimal/Money/BCMath conventions.
+
+Inspect the existing precision before choosing a schema precision.
+
+The exchange-rate precision must be sufficient for international accounting.
+
+Do not round the exchange rate prematurely.
+
+Round the resulting monetary amount according to the target currency/accounting
+precision at the appropriate calculation boundary.
+
+---
+
+# 11. HISTORICAL RATE INTEGRITY
+
+Historical accounting records must retain the exchange-rate context used when
+the transaction was recorded.
+
+Changing today's exchange rate must never rewrite yesterday's transaction.
+
+For posted financial transactions:
+
+- original transaction currency remains unchanged;
+- original foreign amount remains unchanged;
+- original exchange rate remains unchanged;
+- original base amount remains unchanged.
+
+Do not recalculate posted historical amounts from the current exchange-rate
+table.
+
+The exchange-rate table is a source for selecting/calculating new transactions,
+not a mechanism for rewriting historical journals.
+
+---
+
+# 12. JOURNAL LINE CURRENCY MODEL
+
+Inspect the existing journal_lines implementation.
+
+The target design should be able to distinguish:
+
+- transaction currency;
+- transaction-currency debit/credit;
+- exchange rate;
+- base-currency debit/credit.
+
+Example:
+
+Transaction:
+
+USD 1,000
+
+Rate:
+
+1 USD = 83.50 INR
+
+Journal:
+
+| Account             |               Currency |         Foreign Amount |  Base Amount |
+| ------------------- | ---------------------: | ---------------------: | -----------: |
+| Accounts Receivable |                    USD |            Dr 1,000.00 | Dr 83,500.00 |
+| Revenue             | USD/base as applicable | Cr 1,000.00 equivalent | Cr 83,500.00 |
+
+Do not blindly apply this example to every journal.
+
+The implementation must follow the actual account/document semantics.
+
+---
+
+# 13. JOURNAL BALANCE RULE
+
+The existing accounting invariant remains:
+
+**Total debits = total credits**
+
+For base currency:
+
+`Σ base_debit = Σ base_credit`
+
+The posting engine must continue to validate this using exact decimal
+arithmetic.
+
+Do not weaken the existing posting validation because currencies are involved.
+
+If the architecture requires transaction-currency balancing for a journal,
+enforce it consistently.
+
+If a journal legitimately contains multiple currencies, the system must balance
+through the base-currency representation.
+
+Document the rule clearly.
+
+---
+
+# 14. MULTI-CURRENCY DOCUMENTS
+
+Inspect the existing document architecture.
+
+Affected modules may include:
+
+- Sales Invoice
+- Purchase Bill
+- Customer Payment
+- Supplier Payment
+- Expense
+- Credit Note
+- Debit Note
+- Fixed Asset transactions where applicable
+- Cash/Bank transactions where applicable
+
+For each module, determine whether:
+
+1. transaction currency must be supported;
+2. base currency must be stored;
+3. exchange rate must be stored;
+4. tax calculation needs currency context;
+5. settlement/allocation needs currency handling.
+
+Do not add currency fields to unrelated modules without a real accounting
+requirement.
+
+---
+
+# 15. DOCUMENT HISTORICAL SNAPSHOT
+
+For every posted multi-currency document, the accounting-relevant currency
+context must be historically stable.
+
+At minimum, where applicable:
+
+- transaction currency;
+- foreign amount;
+- exchange rate;
+- base amount.
+
+must not change after posting.
+
+Do not resolve historical amounts dynamically from the current currency/rate
+master.
+
+---
+
+# 16. TAX ENGINE INTEGRATION
+
+Reuse the existing Tax Engine.
+
+Do not create a second tax calculation system.
+
+Inspect the Phase 10 implementation carefully.
+
+Tax calculations must preserve:
+
+- tax currency context;
+- transaction currency amount;
+- tax rate;
+- tax amount;
+- base tax amount where required for accounting/reporting.
+
+Existing historical tax snapshots must remain immutable.
+
+The Tax Engine remains separate from the accounting engine.
+
+---
+
+# 17. CUSTOMER/SUPPLIER SETTLEMENTS
+
+Inspect:
+
+- SettlementService
+- customer payment allocation
+- supplier payment allocation
+- invoice/bill outstanding calculations
+
+Multi-currency settlement must not introduce inconsistent balances.
+
+For example:
+
+Invoice:
+
+USD 1,000
+
+Payment:
+
+USD 400
+
+Outstanding:
+
+USD 600
+
+The system must distinguish:
+
+- foreign-currency outstanding amount;
+- base-currency accounting amount;
+- exchange-rate differences where applicable.
+
+Do not store a second independent receivable/payable balance.
+
+Existing ledger/accounting data remains authoritative.
+
+---
+
+# 18. REALIZED FX GAIN/LOSS
+
+Determine whether the existing architecture can safely support realized FX
+differences.
+
+A realized FX difference can occur when:
+
+- an invoice is recorded at one exchange rate;
+- settlement occurs at another exchange rate.
+
+Example:
+
+Invoice:
+
+USD 1,000 @ 83.00 = INR 83,000
+
+Payment:
+
+USD 1,000 @ 84.00 = INR 84,000
+
+Difference:
+
+INR 1,000 FX loss/gain depending on the accounting direction.
+
+If implementing realized FX:
+
+- create proper FX gain/loss accounts;
+- use the existing journal engine;
+- use existing posting controls;
+- do not create a separate FX ledger;
+- preserve the original invoice and payment amounts;
+- generate the FX difference through normal double-entry accounting;
+- audit the resulting accounting event.
+
+The exact journal direction must be derived from the transaction/accounting
+context.
+
+Do not hard-code an incorrect universal debit/credit rule.
+
+---
+
+# 19. UNREALIZED FX
+
+Determine whether unrealized FX revaluation can be implemented safely using the
+existing architecture.
+
+If implemented:
+
+- it must be a controlled accounting operation;
+- it must operate against open foreign-currency monetary balances;
+- it must create normal journal entries;
+- it must respect fiscal periods;
+- it must be auditable;
+- it must not rewrite original transaction history;
+- it must not permanently overwrite original transaction rates;
+- reversal/revaluation cycles must be traceable.
+
+If the current architecture cannot support this safely, **defer unrealized FX
+revaluation** rather than creating an unsafe implementation.
+
+Document the reason in the Phase 14 report.
+
+---
+
+# 20. FX GAIN/LOSS ACCOUNTS
+
+If realized or unrealized FX is implemented, use existing chart-of-accounts
+infrastructure.
+
+Do not create hidden accounting accounts outside the chart of accounts.
+
+Potential configuration:
+
+- realized FX gain account;
+- realized FX loss account;
+- unrealized FX gain account;
+- unrealized FX loss account.
+
+Reuse existing account configuration patterns.
+
+All such accounts must be company scoped.
+
+---
+
+# 21. CASH & BANK INTEGRATION
+
+Inspect Phase 7 Cash & Banking.
+
+Foreign-currency bank accounts may require:
+
+- account currency;
+- transaction currency;
+- exchange rate;
+- base amount.
+
+Do not break existing cash/bank posting:
+
+Deposit:
+
+`Dr destination / Cr source`
+
+Withdrawal:
+
+`Dr destination / Cr source`
+
+Transfer:
+
+`Dr destination / Cr source`
+
+The multi-currency implementation must preserve these accounting rules.
+
+Bank reconciliation must continue to use the ledger/journal as its accounting
+reference.
+
+Do not introduce a second bank balance system.
+
+---
+
+# 22. BANK RECONCILIATION
+
+Inspect Phase 9.
+
+Determine how foreign-currency bank movements should appear.
+
+The reconciliation model must remain based on actual journal/ledger movements.
+
+Do not rewrite the reconciliation engine unnecessarily.
+
+If statement currency differs from company base currency, document exactly which
+values are compared.
+
+If the current reconciliation architecture cannot safely support
+foreign-currency statements, defer that specific capability rather than
+introducing ambiguous calculations.
+
+---
+
+# 23. FIXED ASSETS
+
+Inspect Phase 12.
+
+Determine whether fixed assets can be denominated in currencies other than the
+company base currency.
+
+Historical asset values, capitalization, depreciation, disposal, and gain/loss
+must remain consistent.
+
+Do not rewrite existing asset history.
+
+If multi-currency fixed assets are not safely supported by the existing Phase 12
+design, explicitly defer that integration.
+
+Do not weaken fixed-asset accounting to force currency support into this phase.
+
+---
+
+# 24. REPORTING
+
+Extend existing reports rather than creating a parallel reporting system.
+
+Inspect:
+
+- Trial Balance
+- General Ledger
+- Profit & Loss
+- Balance Sheet
+- Customer Statement
+- Supplier Statement
+- Receivables
+- Payables
+- Aging reports
+- Cash/Bank Activity
+- Tax reports
+- Fixed Asset reports
+
+Reports must clearly distinguish:
+
+- transaction currency;
+- base currency;
+- exchange rate;
+- converted/base amounts.
+
+Never present foreign amounts as if they were base amounts.
+
+---
+
+# 25. REPORTING CONVERSION
+
+If reporting conversion is implemented:
+
+- specify the conversion date;
+- specify the source currency;
+- specify the target/reporting currency;
+- specify the exchange-rate policy;
+- use exact decimal arithmetic;
+- make the conversion methodology explicit.
+
+Do not silently convert historical financial statements using today's rate.
+
+Historical accounting statements must remain reproducible.
+
+---
+
+# 26. FINANCIAL STATEMENT CURRENCY
+
+The company's standard financial statements should remain based on the company's
+base currency unless an explicit reporting-currency feature is introduced.
+
+Do not add arbitrary currency conversion to every report merely to expose a
+feature.
+
+If a report supports a currency filter/conversion, its semantics must be
+documented.
+
+---
+
+# 27. ACCOUNTING PERIODS
+
+All FX accounting operations must respect the existing fiscal-period rules.
+
+A transaction cannot be posted into:
+
+- a closed period;
+- a locked period.
+
+Any FX revaluation, realized FX adjustment, or similar journal must follow the
+same period controls as every other accounting journal.
+
+Do not create a special FX exception.
+
+---
+
+# 28. AUDIT INTEGRATION
+
+Reuse Phase 13 AuditService.
+
+Important currency-related actions should be auditable, including where
+applicable:
+
+- currency created;
+- currency activated/deactivated;
+- exchange rate created;
+- exchange rate updated;
+- exchange rate activated/deactivated;
+- company base currency changed;
+- FX adjustment posted;
+- FX revaluation posted;
+- relevant configuration changes.
+
+Audit records must not contain:
+
+- passwords;
+- OTPs;
+- tokens;
+- authorization headers;
+- cookies;
+- secrets.
+
+Audit records remain immutable.
+
+---
+
+# 29. ACCOUNTING CONTROL INTEGRATION
+
+Reuse Phase 13 AccountingControlService.
+
+Add appropriate controls where justified, such as:
+
+- missing currency;
+- invalid currency;
+- invalid exchange rate;
+- inconsistent base amount;
+- inconsistent foreign amount;
+- missing historical exchange-rate context;
+- invalid FX journal;
+- broken currency references.
+
+Do not create redundant control systems.
+
+Control reports remain read-only.
+
+No auto-repair.
+
+---
+
+# 30. IMMUTABILITY
+
+Posted financial records remain immutable.
+
+After posting, users must not be able to directly change:
+
+- transaction currency;
+- foreign amount;
+- exchange rate;
+- base amount;
+- accounting date;
+- journal lines.
+
+Corrections must use the existing correction/reversal architecture.
+
+Do not introduce direct historical rewriting.
+
+---
+
+# 31. COMPANY ISOLATION
+
+Every currency-related company-owned record must be properly scoped.
+
+Verify:
+
+- currencies where company-scoped;
+- exchange rates;
+- account configuration;
+- FX settings;
+- FX journals;
+- reports;
+- audit records;
+- control findings.
+
+Cross-company access must result in the same secure behavior used throughout the
+application.
+
+Test:
+
+- URL tampering;
+- ID tampering;
+- exchange-rate ID tampering;
+- journal ID tampering;
+- document ID tampering.
+
+---
+
+# 32. AUTHORIZATION
+
+Inspect the existing permission naming convention.
+
+If new permissions are required, follow the current authorization architecture.
+
+Potential permissions may include:
+
+- `accounting.currency.view`
+- `accounting.currency.create`
+- `accounting.currency.update`
+- `accounting.currency.activate`
+- `accounting.exchange_rate.view`
+- `accounting.exchange_rate.create`
+- `accounting.exchange_rate.update`
+- `accounting.fx.post`
+
+Do not blindly create all of these.
+
+Only create permissions that correspond to actual endpoints/actions.
+
+Role assignment must follow the established project policy.
+
+Never rely on frontend authorization.
+
+---
+
+# 33. API DESIGN
+
+Follow the existing REST conventions.
+
+Potential endpoints may include:
+
+```text
+GET    /api/accounting/currencies
+POST   /api/accounting/currencies
+GET    /api/accounting/currencies/{currency}
+PUT    /api/accounting/currencies/{currency}
+POST   /api/accounting/currencies/{currency}/activate
+POST   /api/accounting/currencies/{currency}/deactivate
+
+GET    /api/accounting/exchange-rates
+POST   /api/accounting/exchange-rates
+GET    /api/accounting/exchange-rates/{exchangeRate}
+PUT    /api/accounting/exchange-rates/{exchangeRate}
+POST   /api/accounting/exchange-rates/{exchangeRate}/activate
+POST   /api/accounting/exchange-rates/{exchangeRate}/deactivate
+```
+
+These are examples only.
+
+Inspect existing route conventions and avoid unnecessary endpoint proliferation.
+
+Any FX posting/revaluation endpoint must follow the existing accounting
+operation conventions.
+
+All APIs must have:
+
+- authentication;
+- company context;
+- authorization;
+- validation;
+- scoped model resolution;
+- consistent API responses;
+- pagination where collection endpoints require it.
+
+---
+
+# 34. EXCHANGE-RATE RESOLUTION
+
+Create a reusable exchange-rate resolver only if the repository does not already
+have an equivalent.
+
+Its responsibility should be limited to:
+
+- resolving a valid rate;
+- respecting effective dates;
+- validating currency pairs;
+- returning exact decimal rates.
+
+It must not:
+
+- create journals;
+- calculate taxes;
+- maintain account balances;
+- post financial transactions.
+
+Keep responsibilities separated.
+
+---
+
+# 35. MONEY CALCULATION
+
+Reuse the existing Money/decimal arithmetic infrastructure.
+
+Do not introduce another money library or parallel arithmetic abstraction unless
+the existing implementation is demonstrably insufficient.
+
+All financial calculations must be deterministic.
+
+Avoid:
+
+```php
+(float)
+(double)
+```
+
+for monetary values.
+
+Do not compare monetary values using binary floating-point equality.
+
+---
+
+# 36. DATABASE CONSTRAINTS
+
+Inspect the existing MySQL schema.
+
+Use database constraints where they improve integrity.
+
+Examples:
+
+- valid currency references;
+- valid exchange-rate references;
+- unique ISO currency codes;
+- appropriate currency-pair/date uniqueness where required;
+- nonnegative exchange rates;
+- appropriate decimal precision.
+
+Do not rely exclusively on application-level validation for critical referential
+integrity.
+
+Preserve MySQL 8.4 / InnoDB compatibility.
+
+---
+
+# 37. CONCURRENCY
+
+Currency operations that affect accounting must be concurrency-safe.
+
+Test scenarios such as:
+
+- two users posting the same FX operation;
+- two users creating duplicate effective rates;
+- two users modifying exchange-rate configuration;
+- simultaneous settlement of the same foreign-currency balance;
+- simultaneous FX adjustment.
+
+Use the existing transaction/locking patterns where appropriate.
+
+Do not add locks everywhere without justification.
+
+---
+
+# 38. PERFORMANCE
+
+Do not introduce unnecessary global scans during normal transactions.
+
+Normal transaction processing should use targeted queries.
+
+Global currency/control calculations should be limited to explicit
+reports/control operations.
+
+Avoid N+1 queries.
+
+Use appropriate indexes for:
+
+- currency codes;
+- company_id;
+- currency pairs;
+- effective dates;
+- exchange-rate lookups;
+- journal/account relationships.
+
+Verify query behavior where practical.
+
+---
+
+# 39. TESTING REQUIREMENTS
+
+Create comprehensive tests.
+
+At minimum cover:
+
+## Currency
+
+- create currency;
+- duplicate ISO code;
+- activate/deactivate;
+- inactive currency rejection;
+- authorization;
+- company isolation.
+
+## Exchange Rates
+
+- create rate;
+- update rate where allowed;
+- historical rate resolution;
+- invalid rate rejection;
+- duplicate/conflicting rate handling;
+- effective-date behavior;
+- company isolation;
+- authorization.
+
+## Documents
+
+Test applicable:
+
+- sales invoices;
+- purchase bills;
+- customer payments;
+- supplier payments;
+- expenses;
+- credit/debit notes;
+- cash/bank;
+- fixed assets.
+
+## Accounting
+
+Verify:
+
+- journal balances;
+- foreign amount;
+- base amount;
+- exchange rate;
+- posting;
+- immutability;
+- fiscal periods;
+- account references.
+
+## FX
+
+If realized FX is implemented:
+
+- gain scenario;
+- loss scenario;
+- partial settlement;
+- full settlement;
+- journal balance;
+- correct FX account;
+- audit event.
+
+If unrealized FX is implemented:
+
+- revaluation;
+- reversal;
+- repeated revaluation;
+- period handling;
+- audit;
+- historical preservation.
+
+## Reporting
+
+Verify applicable:
+
+- General Ledger;
+- Trial Balance;
+- P&L;
+- Balance Sheet;
+- Customer Statement;
+- Supplier Statement;
+- Receivables;
+- Payables;
+- Aging;
+- Cash/Bank;
+- Tax reports;
+- Fixed Asset reports.
+
+## Security
+
+Test:
+
+- unauthorized access;
+- role restrictions;
+- company tampering;
+- resource ID tampering;
+- posted-record mutation;
+- exchange-rate tampering;
+- currency configuration tampering.
+
+## Regression
+
+All existing tests must continue to pass.
+
+---
+
+# 40. MIGRATION SAFETY
+
+All migrations must be additive unless an existing field genuinely requires a
+safe correction.
+
+Before migration:
+
+- inspect existing schema;
+- identify existing currency fields;
+- identify existing data;
+- determine nullability implications;
+- determine whether existing records require a safe default.
+
+Do not fabricate historical exchange rates.
+
+Do not silently assign arbitrary currencies to historical records.
+
+If existing historical records cannot be migrated safely, STOP and report the
+issue.
+
+---
+
+# 41. NO SEEDERS
+
+Do not create or run seeders.
+
+Do not insert sample currencies automatically through seeders.
+
+If system-required reference currencies need a controlled installation/bootstrap
+mechanism, inspect the existing project conventions first and document the
+approach.
+
+Do not introduce hidden database mutations.
+
+---
+
+# 42. NO FRONTEND
+
+Do not implement:
+
+- Next.js pages;
+- dashboards;
+- charts;
+- frontend currency selectors;
+- frontend FX forms;
+- frontend report redesign.
+
+This phase is backend/accounting infrastructure only.
+
+The frontend will consume the resulting APIs later.
+
+---
+
+# 43. NO UNRELATED REFACTORING
+
+Do not:
+
+- rewrite working services;
+- rename unrelated classes;
+- reorganize unrelated directories;
+- replace working authentication;
+- replace the existing journal engine;
+- replace the existing Tax Engine;
+- replace the existing reporting engine;
+- replace the existing audit system;
+- change existing accounting semantics without necessity.
+
+Keep the implementation additive and focused.
+
+---
+
+# 44. DOCUMENTATION
+
+Create:
+
+```text
+docs/reports/PHASE_14_REPORT.md
+```
+
+First inspect whether the repository uses:
+
+```text
+docs/report/
+```
+
+or:
+
+```text
+docs/reports/
+```
+
+Use the existing repository convention rather than blindly creating a new
+directory.
+
+The report must include:
+
+1. Phase objective
+2. Existing currency infrastructure reviewed
+3. Architecture decisions
+4. Database changes
+5. Currency model
+6. Exchange-rate model
+7. Base-currency behavior
+8. Journal integration
+9. Document integrations
+10. Tax integration
+11. Settlement integration
+12. FX gain/loss implementation
+13. Unrealized FX status
+14. Reporting integration
+15. Audit integration
+16. Control integration
+17. Authorization
+18. Company isolation
+19. Security review
+20. Concurrency review
+21. Tests
+22. Migration verification
+23. Known limitations
+24. Deferred functionality
+25. Final status
+
+Use:
+
+```text
+PASS
+PASS WITH NOTES
+BLOCKED
+```
+
+---
+
+# 45. REQUIRED VERIFICATION
+
+Run appropriate checks including:
+
+```bash
+php artisan test
+```
+
+or the repository's established PHPUnit command.
+
+Run:
+
+```bash
+./vendor/bin/pint --test
+```
+
+Also verify:
+
+- migrations;
+- rollback;
+- migrations re-apply;
+- route registration;
+- authorization;
+- company isolation;
+- API validation;
+- database constraints;
+- relevant accounting reports.
+
+Do not claim verification that was not actually performed.
+
+---
+
+# 46. BASELINE REGRESSION REQUIREMENT
+
+Phase 13 baseline:
+
+**947 tests / 4,624 assertions**
+
+The final report must state:
+
+- previous test count;
+- Phase 14 test count;
+- assertion count;
+- failures;
+- errors;
+- skipped tests if any.
+
+The exact final numbers must come from the actual test run.
+
+Do not estimate.
+
+---
+
+# 47. ACCEPTANCE CRITERIA
+
+Phase 14 is accepted only if:
+
+### Currency
+
+- [ ] Currency master is correct and company-safe.
+- [ ] ISO currency codes are validated.
+- [ ] Currency precision is respected.
+- [ ] Inactive currencies cannot be used incorrectly.
+
+### Base Currency
+
+- [ ] Every accounting company has a clearly defined base currency.
+- [ ] Historical base-currency accounting is preserved.
+- [ ] Unsafe base-currency changes are prevented.
+
+### Exchange Rates
+
+- [ ] Exchange rates use exact decimal arithmetic.
+- [ ] Effective dates work correctly.
+- [ ] Historical rates are not silently overwritten.
+- [ ] Rate resolution is deterministic.
+
+### Accounting
+
+- [ ] Foreign transactions integrate with the existing journal engine.
+- [ ] Base amounts are correct.
+- [ ] Journals remain balanced.
+- [ ] Posted financial records remain immutable.
+- [ ] Fiscal-period controls remain enforced.
+
+### Tax
+
+- [ ] Existing Tax Engine is reused.
+- [ ] Historical tax snapshots remain correct.
+- [ ] No second tax engine exists.
+
+### Settlement
+
+- [ ] Foreign-currency settlements are consistent.
+- [ ] Existing allocation logic remains authoritative.
+- [ ] No duplicate receivable/payable balance system is introduced.
+
+### FX
+
+- [ ] Realized FX is implemented only if safely supported.
+- [ ] Unrealized FX is implemented only if safely supported.
+- [ ] FX entries use the existing journal engine.
+- [ ] FX gain/loss accounts are ordinary chart-of-account accounts.
+
+### Reports
+
+- [ ] Existing reports remain correct.
+- [ ] Currency semantics are explicit.
+- [ ] Base and foreign amounts are not confused.
+- [ ] No historical report values are silently rewritten.
+
+### Audit & Controls
+
+- [ ] Important currency/FX actions are audited.
+- [ ] Audit records remain immutable.
+- [ ] Currency-related integrity checks are integrated where appropriate.
+- [ ] No auto-repair exists.
+
+### Security
+
+- [ ] Company isolation verified.
+- [ ] Authorization verified.
+- [ ] ID tampering tested.
+- [ ] Posted-record mutation prevented.
+- [ ] Sensitive information is not exposed in audit logs.
+
+### Quality
+
+- [ ] Full test suite passes.
+- [ ] Pint passes.
+- [ ] Migration verification passes.
+- [ ] No unrelated refactoring.
+- [ ] No frontend changes.
+- [ ] No seeders.
+- [ ] Phase 14 report completed.
+
+---
+
+# 48. FINAL IMPLEMENTATION RULE
+
+**Inspect first. Implement second.**
+
+Use the existing architecture wherever possible.
+
+The existing accounting engine remains the single source of truth.
+
+The existing:
+
+- JournalService
+- JournalPostingService
+- LedgerService
+- Tax Engine
+- SettlementService
+- Cash & Banking
+- Bank Reconciliation
+- Fixed Assets
+- AuditService
+- AccountingControlService
+- Fiscal Period controls
+- CompanyContext
+- authorization system
+
+must be reused rather than duplicated.
+
+Do not create:
+
+- a second ledger;
+- a second posting engine;
+- a second balance system;
+- a second tax engine;
+- a second audit system;
+- a separate FX ledger.
+
+Do not automatically rewrite historical financial data.
+
+Do not auto-repair accounting history.
+
+Do not weaken immutability.
+
+Do not silently change existing accounting semantics.
+
+If a requirement cannot be implemented safely with the existing architecture,
+stop at that boundary, document the conflict, and report it as **BLOCKED** or
+**PASS WITH NOTES** rather than introducing an unsafe workaround.
+
+At the end, produce:
+
+```text
+docs/reports/PHASE_14_REPORT.md
+```
+
+using the repository's actual documentation convention, and provide the exact
+final test/style/migration verification results.

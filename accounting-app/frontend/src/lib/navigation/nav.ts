@@ -45,8 +45,28 @@ export const NAV_SECTIONS: readonly NavSection[] = [
         label: "Journals",
         permission: "journals.view",
       },
+      {
+        href: "/financial-years",
+        label: "Financial years",
+        permission: "accounting.periods.view",
+      },
+      {
+        href: "/periods",
+        label: "Accounting periods",
+        permission: "accounting.periods.view",
+      },
+      {
+        href: "/taxes",
+        label: "Taxes",
+        permission: "accounting.tax.view",
+      },
+      {
+        href: "/tax-calculator",
+        label: "Tax calculator",
+        permission: "accounting.tax.calculate",
+      },
     ],
-    upcoming: ["Ledgers", "Periods and controls"],
+    upcoming: ["Ledgers"],
   },
   {
     label: "Sales and receivables",
@@ -76,13 +96,23 @@ export const NAV_SECTIONS: readonly NavSection[] = [
         label: "Transactions",
         permission: "accounting.cash_bank.view",
       },
+      {
+        href: "/bank-reconciliations",
+        label: "Reconciliations",
+        permission: "accounting.bank_reconciliation.view",
+      },
     ],
-    upcoming: ["Reconciliations"],
   },
   {
     label: "Reports",
-    items: [],
-    upcoming: ["Financial reports", "Tax reports"],
+    items: [
+      {
+        href: "/tax-reports",
+        label: "Tax reports",
+        permission: "accounting.tax.report.view",
+      },
+    ],
+    upcoming: ["Financial reports"],
   },
   {
     label: "Company",
