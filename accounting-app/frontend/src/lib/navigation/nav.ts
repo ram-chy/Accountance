@@ -66,7 +66,6 @@ export const NAV_SECTIONS: readonly NavSection[] = [
         permission: "accounting.tax.calculate",
       },
     ],
-    upcoming: ["Ledgers"],
   },
   {
     label: "Sales and receivables",
@@ -107,12 +106,37 @@ export const NAV_SECTIONS: readonly NavSection[] = [
     label: "Reports",
     items: [
       {
+        href: "/reports/trial-balance",
+        label: "Trial Balance",
+        permission: "accounting.reports.view",
+      },
+      {
+        href: "/reports/profit-loss",
+        label: "Profit & Loss",
+        permission: "accounting.reports.view",
+      },
+      {
+        href: "/reports/general-ledger",
+        label: "General Ledger",
+        permission: "accounting.reports.view",
+      },
+      {
+        href: "/reports/balance-sheet",
+        label: "Balance Sheet",
+        permission: "accounting.reports.view",
+      },
+      {
+        href: "/reports/cash-bank",
+        label: "Cash & Bank",
+        permission: "accounting.reports.view",
+      },
+      {
         href: "/tax-reports",
         label: "Tax reports",
         permission: "accounting.tax.report.view",
       },
     ],
-    upcoming: ["Financial reports"],
+    upcoming: [],
   },
   {
     label: "Company",
