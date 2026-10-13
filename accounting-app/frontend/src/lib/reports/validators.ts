@@ -14,6 +14,12 @@ import type { BalanceSheetResponse } from "./balance-sheet-types";
 import type { GeneralLedgerResponse } from "./general-ledger-types";
 import type { ProfitLossResponse } from "./profit-loss-types";
 import type { TrialBalanceResponse } from "./trial-balance-types";
+import type { CustomerStatementResponse } from "./customer-statement-types";
+import type { ReceivablesResponse } from "./receivables-types";
+import type { ReceivablesAgingResponse } from "./receivables-aging-types";
+import type { SupplierStatementResponse } from "./supplier-statement-types";
+import type { PayablesResponse } from "./payables-types";
+import type { PayablesAgingResponse } from "./payables-aging-types";
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 const DECIMAL_RE = /^[+-]?\d+(\.\d+)?$/;
@@ -229,4 +235,206 @@ export function parseBalanceSheet(input: unknown): BalanceSheetResponse | null {
   if (!isDecimalLike(input.current_period_result)) return null;
 
   return input as BalanceSheetResponse;
+}
+
+/**
+ * `{ id, code, name }` — the counterparty summary shared by the customer
+ * statement and the receivables/aging reports. `id` can be null on a receivables
+ * row whose invoice lost its customer, but the object itself is always present.
+ */
+function validateCounterpartySummary(v: unknown): boolean {
+  if (!isObject(v)) return false;
+  return isNullableNumber(v.id) && isNullableString(v.code) && isNullableString(v.name);
+}
+
+export function parseCustomerStatement(input: unknown): CustomerStatementResponse | null {
+  if (!isObject(input)) return null;
+  if (!validateCounterpartySummary(input.customer)) return null;
+  if (!validatePeriod(input.period)) return null;
+  if (!validateBaseCurrency(input.base_currency)) return null;
+  if (!isDecimalLike(input.opening_balance)) return null;
+  if (!Array.isArray(input.rows)) return null;
+  if (!isObject(input.totals)) return null;
+  if (!isDecimalLike(input.totals.debit)) return null;
+  if (!isDecimalLike(input.totals.credit)) return null;
+  if (!isDecimalLike(input.closing_balance)) return null;
+
+  for (const row of input.rows) {
+    if (!isObject(row)) return null;
+    if (!isIsoDate(row.date)) return null;
+    if (!isString(row.type)) return null;
+    if (!isNullableString(row.reference)) return null;
+    if (!isNullableString(row.description)) return null;
+    if (!isDecimalLike(row.debit)) return null;
+    if (!isDecimalLike(row.credit)) return null;
+    if (!isDecimalLike(row.running_balance)) return null;
+    if (!isNullableString(row.currency_code)) return null;
+    if (!isNullableString(row.exchange_rate)) return null;
+    if (!isNullableDecimal(row.foreign_amount)) return null;
+  }
+
+  return input as CustomerStatementResponse;
+}
+
+export function parseReceivables(input: unknown): ReceivablesResponse | null {
+  if (!isObject(input)) return null;
+  if (!isIsoDate(input.as_of)) return null;
+  if (!validateBaseCurrency(input.base_currency)) return null;
+  if (!Array.isArray(input.rows)) return null;
+  if (!isNumber(input.count)) return null;
+  if (!isObject(input.totals)) return null;
+  if (!isDecimalLike(input.totals.grand_total)) return null;
+  if (!isDecimalLike(input.totals.paid_total)) return null;
+  if (!isDecimalLike(input.totals.balance_due)) return null;
+
+  for (const row of input.rows) {
+    if (!isObject(row)) return null;
+    if (!isNumber(row.invoice_id)) return null;
+    if (!isNullableString(row.invoice_number)) return null;
+    if (!isNullableIsoDate(row.invoice_date)) return null;
+    if (!isNullableIsoDate(row.due_date)) return null;
+    if (!validateCounterpartySummary(row.customer)) return null;
+    if (!isDecimalLike(row.grand_total)) return null;
+    if (!isDecimalLike(row.paid_total)) return null;
+    if (!isDecimalLike(row.balance_due)) return null;
+    if (!isNullableNumber(row.days_past_due)) return null;
+    if (!isNullableString(row.currency_code)) return null;
+    if (!isNullableString(row.exchange_rate)) return null;
+    if (!isNullableDecimal(row.base_grand_total)) return null;
+  }
+
+  return input as ReceivablesResponse;
+}
+
+export function parseReceivablesAging(input: unknown): ReceivablesAgingResponse | null {
+  if (!isObject(input)) return null;
+  if (!isIsoDate(input.as_of)) return null;
+  if (!validateBaseCurrency(input.base_currency)) return null;
+  if (!Array.isArray(input.buckets)) return null;
+  if (!Array.isArray(input.rows)) return null;
+  if (!isObject(input.totals)) return null;
+  if (!isObject(input.totals.by_bucket)) return null;
+  if (!isDecimalLike(input.totals.total)) return null;
+
+  for (const bucket of input.buckets) {
+    if (!isObject(bucket)) return null;
+    if (!isString(bucket.key)) return null;
+    if (!isString(bucket.label)) return null;
+    if (!isNullableNumber(bucket.min)) return null;
+    if (!isNullableNumber(bucket.max)) return null;
+    if (!isDecimalLike(bucket.total)) return null;
+  }
+
+  for (const row of input.rows) {
+    if (!isObject(row)) return null;
+    if (!validateCounterpartySummary(row.counterparty)) return null;
+    if (!isObject(row.buckets)) return null;
+    if (!isDecimalLike(row.total)) return null;
+
+    for (const value of Object.values(row.buckets)) {
+      if (!isDecimalLike(value)) return null;
+    }
+  }
+
+  for (const value of Object.values(input.totals.by_bucket)) {
+    if (!isDecimalLike(value)) return null;
+  }
+
+  return input as ReceivablesAgingResponse;
+}
+
+export function parseSupplierStatement(input: unknown): SupplierStatementResponse | null {
+  if (!isObject(input)) return null;
+  if (!validateCounterpartySummary(input.supplier)) return null;
+  if (!validatePeriod(input.period)) return null;
+  if (!validateBaseCurrency(input.base_currency)) return null;
+  if (!isDecimalLike(input.opening_balance)) return null;
+  if (!Array.isArray(input.rows)) return null;
+  if (!isObject(input.totals)) return null;
+  if (!isDecimalLike(input.totals.debit)) return null;
+  if (!isDecimalLike(input.totals.credit)) return null;
+  if (!isDecimalLike(input.closing_balance)) return null;
+
+  for (const row of input.rows) {
+    if (!isObject(row)) return null;
+    if (!isIsoDate(row.date)) return null;
+    if (!isString(row.type)) return null;
+    if (!isNullableString(row.reference)) return null;
+    if (!isNullableString(row.description)) return null;
+    if (!isDecimalLike(row.debit)) return null;
+    if (!isDecimalLike(row.credit)) return null;
+    if (!isDecimalLike(row.running_balance)) return null;
+    if (!isNullableString(row.currency_code)) return null;
+    if (!isNullableString(row.exchange_rate)) return null;
+    if (!isNullableDecimal(row.foreign_amount)) return null;
+  }
+
+  return input as SupplierStatementResponse;
+}
+
+export function parsePayables(input: unknown): PayablesResponse | null {
+  if (!isObject(input)) return null;
+  if (!isIsoDate(input.as_of)) return null;
+  if (!validateBaseCurrency(input.base_currency)) return null;
+  if (!Array.isArray(input.rows)) return null;
+  if (!isNumber(input.count)) return null;
+  if (!isObject(input.totals)) return null;
+  if (!isDecimalLike(input.totals.grand_total)) return null;
+  if (!isDecimalLike(input.totals.paid_total)) return null;
+  if (!isDecimalLike(input.totals.balance_due)) return null;
+
+  for (const row of input.rows) {
+    if (!isObject(row)) return null;
+    if (!isNumber(row.bill_id)) return null;
+    if (!isNullableString(row.bill_number)) return null;
+    if (!isNullableIsoDate(row.bill_date)) return null;
+    if (!isNullableIsoDate(row.due_date)) return null;
+    if (!validateCounterpartySummary(row.supplier)) return null;
+    if (!isDecimalLike(row.grand_total)) return null;
+    if (!isDecimalLike(row.paid_total)) return null;
+    if (!isDecimalLike(row.balance_due)) return null;
+    if (!isNullableNumber(row.days_past_due)) return null;
+    if (!isNullableString(row.currency_code)) return null;
+    if (!isNullableString(row.exchange_rate)) return null;
+    if (!isNullableDecimal(row.base_grand_total)) return null;
+  }
+
+  return input as PayablesResponse;
+}
+
+export function parsePayablesAging(input: unknown): PayablesAgingResponse | null {
+  if (!isObject(input)) return null;
+  if (!isIsoDate(input.as_of)) return null;
+  if (!validateBaseCurrency(input.base_currency)) return null;
+  if (!Array.isArray(input.buckets)) return null;
+  if (!Array.isArray(input.rows)) return null;
+  if (!isObject(input.totals)) return null;
+  if (!isObject(input.totals.by_bucket)) return null;
+  if (!isDecimalLike(input.totals.total)) return null;
+
+  for (const bucket of input.buckets) {
+    if (!isObject(bucket)) return null;
+    if (!isString(bucket.key)) return null;
+    if (!isString(bucket.label)) return null;
+    if (!isNullableNumber(bucket.min)) return null;
+    if (!isNullableNumber(bucket.max)) return null;
+    if (!isDecimalLike(bucket.total)) return null;
+  }
+
+  for (const row of input.rows) {
+    if (!isObject(row)) return null;
+    if (!validateCounterpartySummary(row.counterparty)) return null;
+    if (!isObject(row.buckets)) return null;
+    if (!isDecimalLike(row.total)) return null;
+
+    for (const value of Object.values(row.buckets)) {
+      if (!isDecimalLike(value)) return null;
+    }
+  }
+
+  for (const value of Object.values(input.totals.by_bucket)) {
+    if (!isDecimalLike(value)) return null;
+  }
+
+  return input as PayablesAgingResponse;
 }

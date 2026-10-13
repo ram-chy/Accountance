@@ -69,17 +69,52 @@ export const NAV_SECTIONS: readonly NavSection[] = [
   },
   {
     label: "Sales and receivables",
-    items: [],
-    upcoming: ["Sales invoices", "Customers", "Credit notes", "Customer receipts"],
+    items: [
+      {
+        href: "/customers",
+        label: "Customers",
+        permission: "customers.view",
+      },
+      {
+        href: "/sales-invoices",
+        label: "Sales invoices",
+        permission: "sales.invoices.view",
+      },
+      {
+        href: "/customer-receipts",
+        label: "Customer receipts",
+        permission: "customer.receipts.view",
+      },
+      {
+        href: "/credit-notes",
+        label: "Credit notes",
+        permission: "accounting.credit_debit_note.view",
+      },
+    ],
   },
   {
     label: "Purchases and payables",
-    items: [],
-    upcoming: [
-      "Purchase bills",
-      "Suppliers",
-      "Debit notes",
-      "Supplier payments",
+    items: [
+      {
+        href: "/suppliers",
+        label: "Suppliers",
+        permission: "suppliers.view",
+      },
+      {
+        href: "/purchase-bills",
+        label: "Purchase bills",
+        permission: "purchases.bills.view",
+      },
+      {
+        href: "/supplier-payments",
+        label: "Supplier payments",
+        permission: "supplier.payments.view",
+      },
+      {
+        href: "/debit-notes",
+        label: "Debit notes",
+        permission: "accounting.credit_debit_note.view",
+      },
     ],
   },
   {
@@ -128,6 +163,36 @@ export const NAV_SECTIONS: readonly NavSection[] = [
       {
         href: "/reports/cash-bank",
         label: "Cash & Bank",
+        permission: "accounting.reports.view",
+      },
+      {
+        href: "/reports/customer-statement",
+        label: "Customer Statement",
+        permission: "accounting.reports.view",
+      },
+      {
+        href: "/reports/receivables",
+        label: "Receivables",
+        permission: "accounting.reports.view",
+      },
+      {
+        href: "/reports/receivables-aging",
+        label: "Aged Receivables",
+        permission: "accounting.reports.view",
+      },
+      {
+        href: "/reports/supplier-statement",
+        label: "Supplier Statement",
+        permission: "accounting.reports.view",
+      },
+      {
+        href: "/reports/payables",
+        label: "Payables",
+        permission: "accounting.reports.view",
+      },
+      {
+        href: "/reports/payables-aging",
+        label: "Aged Payables",
         permission: "accounting.reports.view",
       },
       {

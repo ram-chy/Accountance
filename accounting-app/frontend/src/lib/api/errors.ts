@@ -43,3 +43,26 @@ export class ApiError extends Error {
     return this.status === 422;
   }
 }
+
+/**
+ * Flatten an API `errors` map to the first message per field.
+ *
+ * The backend returns `Record<string, string[]>`, while a form usually shows one
+ * message beside each input. This keeps the first message for a field and drops
+ * any field the server reported with no messages.
+ */
+export function firstFieldErrors(errors?: Record<string, string[]>): Record<string, string> {
+  const result: Record<string, string> = {};
+
+  if (!errors) {
+    return result;
+  }
+
+  for (const [key, messages] of Object.entries(errors)) {
+    if (messages.length > 0) {
+      result[key] = messages[0];
+    }
+  }
+
+  return result;
+}
