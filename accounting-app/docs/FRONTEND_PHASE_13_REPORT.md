@@ -396,14 +396,31 @@ Required Phase 21 runtime smoke tests:
 
 ## 16. Final Git status
 
-After the Phase 13 work (before the operator-requested commit), the change set
-consisted of the modified `nav.ts` plus the untracked reporting module, this
-report, and the Phase 11/12/13 briefs. The pre-existing mangled-stem file and
-stray directories remain untouched.
+Before the operator-requested commit, the change set consisted of the modified
+`nav.ts` plus the untracked reporting module, this report, and the Phase 11/12/13
+briefs.
 
-Per the operator's instruction the work was then committed and pushed to
-`origin/main`. This is the documented deviation from the brief's
-"No commit is created" / "Do not commit changes" clauses (§17).
+Per the operator's instruction the work was then committed and pushed:
+
+- Commit: `8fbea2b` — "Frontend Phase 13: complete accounting reporting core &
+  Phase 11 remediation"
+- Remote: `origin/main` (`https://github.com/ram-chy/Accountance.git`);
+  `origin/main` now equals local `HEAD` (0 ahead / 0 behind).
+
+Committed paths: the frontend reporting module (`lib/reports/`,
+`components/reports/`, `app/(app)/reports/`), `lib/navigation/nav.ts` and
+`nav.test.ts`, `docs/FRONTEND_PHASE_11_REPORT.md` … `_13_REPORT.md`, and
+`prompt/frontend/Phase 11.md` … `Phase 13.md` — following the repository's own
+convention of tracking each prior phase's brief and report.
+
+The pre-existing corrupted-stem file
+(`"D…PHASE_17_REPORT.md"`, containing a U+F03A code point; a duplicate of the
+already-tracked `accounting-app/docs/report/PHASE_17_REPORT.md`) was **left
+untracked and uncommitted** — it is preserved on disk but deliberately not
+pushed, since the filename is clearly an accident. It is the only remaining
+untracked entry. This commit + push is the documented deviation from the brief's
+"No commit is created" / "Do not commit changes" clauses (§17); no other
+prohibited Git operation was performed.
 
 ---
 
