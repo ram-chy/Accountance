@@ -111,4 +111,72 @@ describe("NAV_SECTIONS", () => {
       ]),
     );
   });
+
+  it("links the fixed asset module under the fixed asset permission", () => {
+    const fixedAssets = section("Fixed assets");
+
+    expect(fixedAssets.items).toEqual([
+      { href: "/fixed-assets", label: "Fixed assets", permission: "accounting.fixed_asset.view" },
+      { href: "/fixed-assets/register", label: "Register", permission: "accounting.fixed_asset.view" },
+      { href: "/fixed-assets/categories", label: "Categories", permission: "accounting.fixed_asset.view" },
+      { href: "/fixed-assets/depreciation", label: "Depreciation", permission: "accounting.fixed_asset.view" },
+      { href: "/fixed-assets/disposals", label: "Disposals", permission: "accounting.fixed_asset.view" },
+      { href: "/fixed-assets/reports", label: "Reports", permission: "accounting.fixed_asset.view" },
+    ]);
+  });
+
+  it("does not advertise fixed assets as upcoming anywhere", () => {
+    for (const entry of NAV_SECTIONS) {
+      expect(entry.upcoming ?? []).not.toContain("Fixed assets");
+    }
+  });
+
+  it("links the multi-currency module with its own permissions", () => {
+    const multiCurrency = section("Multi-currency");
+
+    expect(multiCurrency.items).toEqual([
+      { href: "/currencies", label: "Currencies", permission: "accounting.currency.view" },
+      { href: "/exchange-rates", label: "Exchange rates", permission: "accounting.exchange_rate.view" },
+      { href: "/currency-settings", label: "Currency settings", permission: "accounting.fx.update" },
+    ]);
+  });
+
+  it("does not advertise multi-currency items as upcoming anywhere", () => {
+    for (const entry of NAV_SECTIONS) {
+      const upcoming = entry.upcoming ?? [];
+      expect(upcoming).not.toContain("Currencies");
+      expect(upcoming).not.toContain("Exchange rates");
+      expect(upcoming).not.toContain("Currency settings");
+    }
+  });
+
+  it("links budgets, dimensions and budget variance under their own permissions", () => {
+    const budgets = section("Budgets & dimensions");
+
+    expect(budgets.items).toEqual([
+      { href: "/budgets", label: "Budgets", permission: "accounting.budgets.view" },
+      { href: "/dimensions", label: "Dimensions", permission: "accounting.dimensions.view" },
+      {
+        href: "/reports/budget-variance",
+        label: "Budget variance",
+        permission: "accounting.budgets.view",
+      },
+    ]);
+  });
+
+  it("gates budget variance on the budget permission, not the reports permission", () => {
+    const budgetVariance = section("Budgets & dimensions").items.find(
+      (item) => item.href === "/reports/budget-variance",
+    );
+
+    expect(budgetVariance?.permission).toBe("accounting.budgets.view");
+  });
+
+  it("does not advertise budgets or dimensions as upcoming anywhere", () => {
+    for (const entry of NAV_SECTIONS) {
+      const upcoming = entry.upcoming ?? [];
+      expect(upcoming).not.toContain("Budgets");
+      expect(upcoming).not.toContain("Dimensions");
+    }
+  });
 });

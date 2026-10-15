@@ -138,6 +138,81 @@ export const NAV_SECTIONS: readonly NavSection[] = [
     ],
   },
   {
+    label: "Fixed assets",
+    items: [
+      {
+        href: "/fixed-assets",
+        label: "Fixed assets",
+        permission: "accounting.fixed_asset.view",
+      },
+      {
+        href: "/fixed-assets/register",
+        label: "Register",
+        permission: "accounting.fixed_asset.view",
+      },
+      {
+        href: "/fixed-assets/categories",
+        label: "Categories",
+        permission: "accounting.fixed_asset.view",
+      },
+      {
+        href: "/fixed-assets/depreciation",
+        label: "Depreciation",
+        permission: "accounting.fixed_asset.view",
+      },
+      {
+        href: "/fixed-assets/disposals",
+        label: "Disposals",
+        permission: "accounting.fixed_asset.view",
+      },
+      {
+        href: "/fixed-assets/reports",
+        label: "Reports",
+        permission: "accounting.fixed_asset.view",
+      },
+    ],
+  },
+  {
+    label: "Multi-currency",
+    items: [
+      {
+        href: "/currencies",
+        label: "Currencies",
+        permission: "accounting.currency.view",
+      },
+      {
+        href: "/exchange-rates",
+        label: "Exchange rates",
+        permission: "accounting.exchange_rate.view",
+      },
+      {
+        href: "/currency-settings",
+        label: "Currency settings",
+        permission: "accounting.fx.update",
+      },
+    ],
+  },
+  {
+    label: "Budgets & dimensions",
+    items: [
+      {
+        href: "/budgets",
+        label: "Budgets",
+        permission: "accounting.budgets.view",
+      },
+      {
+        href: "/dimensions",
+        label: "Dimensions",
+        permission: "accounting.dimensions.view",
+      },
+      {
+        href: "/reports/budget-variance",
+        label: "Budget variance",
+        permission: "accounting.budgets.view",
+      },
+    ],
+  },
+  {
     label: "Reports",
     items: [
       {
