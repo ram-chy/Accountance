@@ -280,7 +280,34 @@ export const NAV_SECTIONS: readonly NavSection[] = [
   },
   {
     label: "Company",
-    items: [],
-    upcoming: ["Company settings", "Users and roles"],
+    items: [
+      {
+        href: "/settings/company",
+        label: "Company settings",
+        permission: "companies.view",
+      },
+      {
+        href: "/settings/company/members",
+        label: "Members",
+        permission: "companies.update",
+      },
+      {
+        href: "/settings/users",
+        label: "Users",
+        permission: "users.view",
+      },
+      {
+        href: "/companies/new",
+        label: "New company",
+        permission: "companies.create",
+      },
+    ],
+  },
+  {
+    label: "Account",
+    items: [
+      { href: "/settings/profile", label: "My profile" },
+      { href: "/settings/security", label: "Security" },
+    ],
   },
 ];

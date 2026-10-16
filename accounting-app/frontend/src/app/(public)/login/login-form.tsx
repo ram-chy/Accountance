@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
 import { toast } from "sonner";
@@ -152,6 +153,15 @@ export function LoginForm({ nextPath }: LoginFormProps) {
                 <Button type="submit" loading={submitting} className="w-full">
                   {submitting ? "Signing in…" : "Sign in"}
                 </Button>
+
+                <div className="text-center">
+                  <Link
+                    href="/forgot-password"
+                    className="text-sm font-medium text-primary underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                  >
+                    Forgot your password?
+                  </Link>
+                </div>
               </form>
             </CardContent>
           </Card>

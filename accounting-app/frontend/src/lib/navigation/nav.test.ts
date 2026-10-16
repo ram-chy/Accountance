@@ -179,4 +179,31 @@ describe("NAV_SECTIONS", () => {
       expect(upcoming).not.toContain("Dimensions");
     }
   });
+
+  it("links the company administration modules with their own permissions", () => {
+    const company = section("Company");
+
+    expect(company.items).toEqual([
+      { href: "/settings/company", label: "Company settings", permission: "companies.view" },
+      { href: "/settings/company/members", label: "Members", permission: "companies.update" },
+      { href: "/settings/users", label: "Users", permission: "users.view" },
+      { href: "/companies/new", label: "New company", permission: "companies.create" },
+    ]);
+  });
+
+  it("no longer advertises company settings or users as upcoming", () => {
+    const upcoming = section("Company").upcoming ?? [];
+
+    expect(upcoming).not.toContain("Company settings");
+    expect(upcoming).not.toContain("Users and roles");
+  });
+
+  it("exposes the account screens without a permission gate", () => {
+    const account = section("Account");
+
+    expect(account.items).toEqual([
+      { href: "/settings/profile", label: "My profile" },
+      { href: "/settings/security", label: "Security" },
+    ]);
+  });
 });

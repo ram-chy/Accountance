@@ -1,5 +1,6 @@
 import { ApiError } from "@/lib/api/errors";
 import { apiFetch } from "@/lib/api/client";
+import type { QueryParams } from "@/lib/api/types";
 import {
   SERVER_API_BASE_URL,
   isServerApiConfigured,
@@ -23,17 +24,25 @@ export type LoginResult = {
   user: SessionUser;
 };
 
+/** The token payload returned by `/auth/password` (no user object). */
+export type AuthTokenResult = {
+  token: string;
+  token_type: string;
+  expires_in: number;
+};
+
 type LaravelRequestOptions = {
   token?: string;
   companyId?: number | null;
   method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   body?: unknown;
+  query?: QueryParams;
   signal?: AbortSignal;
 };
 
 function laravelFetch<T>(
   path: string,
-  { token, companyId, method = "GET", body, signal }: LaravelRequestOptions = {},
+  { token, companyId, method = "GET", body, query, signal }: LaravelRequestOptions = {},
 ): Promise<T> {
   // Without a server-only Laravel origin, every upstream call would silently
   // hit the Next app itself (or a relative URL). Fail fast with a clear error
@@ -63,6 +72,7 @@ function laravelFetch<T>(
     method,
     body,
     headers,
+    query,
     signal,
   });
 }
@@ -108,6 +118,79 @@ export function switchCompanyRequest(
   companyId: number,
 ): Promise<SessionCompany> {
   return laravelFetch<SessionCompany>(`/companies/${companyId}/switch`, {
+    token,
+    method: "POST",
+  });
+}
+
+/**
+ * `POST /api/auth/forgot-password` — request a reset link.
+ *
+ * The backend returns the same message whether or not the address exists, so
+ * the caller must never try to distinguish the two.
+ */
+export function forgotPasswordRequest(email: string): Promise<void> {
+  return laravelFetch<void>("/auth/forgot-password", {
+    method: "POST",
+    body: { email },
+  });
+}
+
+/**
+ * `GET /api/auth/reset-password/{token}?email=` — check a reset token.
+ *
+ * Returns the masked `email` the token belongs to when valid, and throws a
+ * (400) `ApiError` when the token is stale or the address is unknown — the two
+ * are deliberately indistinguishable.
+ */
+export function validateResetTokenRequest(
+  token: string,
+  email: string,
+  signal?: AbortSignal,
+): Promise<{ email: string }> {
+  return laravelFetch<{ email: string }>(
+    `/auth/reset-password/${encodeURIComponent(token)}`,
+    { query: { email }, signal },
+  );
+}
+
+/** `POST /api/auth/reset-password` — consume a token and set a new password. */
+export function resetPasswordRequest(payload: {
+  token: string;
+  email: string;
+  password: string;
+  password_confirmation: string;
+}): Promise<void> {
+  return laravelFetch<void>("/auth/reset-password", {
+    method: "POST",
+    body: payload,
+  });
+}
+
+/**
+ * `PUT /api/auth/password` — change the authenticated user's password.
+ *
+ * The backend blacklists the token used for this request and returns a
+ * replacement, which the BFF must re-seal into the session cookie.
+ */
+export function changePasswordRequest(
+  token: string,
+  payload: {
+    current_password: string;
+    new_password: string;
+    new_password_confirmation: string;
+  },
+): Promise<AuthTokenResult> {
+  return laravelFetch<AuthTokenResult>("/auth/password", {
+    token,
+    method: "PUT",
+    body: payload,
+  });
+}
+
+/** `POST /api/auth/email/verification-notification` — resend a verify email. */
+export function sendEmailVerificationRequest(token: string): Promise<void> {
+  return laravelFetch<void>("/auth/email/verification-notification", {
     token,
     method: "POST",
   });

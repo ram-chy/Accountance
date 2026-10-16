@@ -75,3 +75,65 @@ export function switchCompany(companyId: number): Promise<SessionCompany> {
     body: { companyId },
   });
 }
+
+/**
+ * Request a password reset link.
+ *
+ * Always resolves to the same generic outcome; the UI must not imply that the
+ * address was found (the backend cannot confirm it without leaking existence).
+ */
+export function requestPasswordReset(email: string): Promise<void> {
+  return bff<void>("/api/session/forgot-password", {
+    method: "POST",
+    body: { email },
+    handleUnauthorized: false,
+  });
+}
+
+/** Check whether a reset token is still usable, and for which address. */
+export function validateResetToken(
+  token: string,
+  email: string,
+  signal?: AbortSignal,
+): Promise<{ email: string }> {
+  return bff<{ email: string }>(
+    `/api/session/reset-password/${encodeURIComponent(token)}`,
+    { query: { email }, signal, handleUnauthorized: false },
+  );
+}
+
+/** Consume a reset token and set a new password. */
+export function resetPassword(payload: {
+  token: string;
+  email: string;
+  password: string;
+  password_confirmation: string;
+}): Promise<void> {
+  return bff<void>("/api/session/reset-password", {
+    method: "POST",
+    body: payload,
+    handleUnauthorized: false,
+  });
+}
+
+/**
+ * Change the authenticated user's password.
+ *
+ * The BFF re-seals the replacement token into the httpOnly cookie, so the
+ * session survives and the old token can no longer be replayed.
+ */
+export function changePassword(payload: {
+  current_password: string;
+  new_password: string;
+  new_password_confirmation: string;
+}): Promise<{ changed: boolean }> {
+  return bff<{ changed: boolean }>("/api/session/password", {
+    method: "PUT",
+    body: payload,
+  });
+}
+
+/** Resend the verification email for the signed-in user. */
+export function resendVerificationEmail(): Promise<void> {
+  return bff<void>("/api/session/verify-email", { method: "POST" });
+}
