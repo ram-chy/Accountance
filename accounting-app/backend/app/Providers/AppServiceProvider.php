@@ -49,6 +49,8 @@ use App\Policies\SupplierPolicy;
 use App\Policies\TaxPolicy;
 use App\Policies\UserPolicy;
 use App\Services\CompanyContext;
+use App\Support\FrontendUrl;
+use Illuminate\Auth\Notifications\ResetPassword;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Http\Request;
@@ -76,6 +78,30 @@ class AppServiceProvider extends ServiceProvider
     {
         $this->configurePolicies();
         $this->configureRateLimiting();
+        $this->configurePasswordResetLinks();
+    }
+
+    /**
+     * Point the framework password-reset notification at the public frontend.
+     *
+     * The framework default builds the emailed link from the named
+     * `password.reset` route, which is this backend's API token probe
+     * (GET /api/auth/reset-password/{token}). That probe is still used by the
+     * SPA to validate a token before showing the form, so the route is kept -
+     * but the link that lands in a user's inbox must open the SPA page
+     * /reset-password and carry the token and email as query parameters.
+     *
+     * The destination is taken from config('frontend.url') only; see
+     * App\Support\FrontendUrl for the validation and fail-safe behaviour.
+     */
+    private function configurePasswordResetLinks(): void
+    {
+        ResetPassword::createUrlUsing(function (User $notifiable, string $token): string {
+            return FrontendUrl::to('/reset-password', [
+                'token' => $token,
+                'email' => $notifiable->getEmailForPasswordReset(),
+            ]);
+        });
     }
 
     private function configurePolicies(): void

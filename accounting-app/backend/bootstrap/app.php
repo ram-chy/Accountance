@@ -32,6 +32,20 @@ return Application::configure(basePath: dirname(__DIR__))
     )
     ->withMiddleware(function (Middleware $middleware): void {
         /*
+         | This application is a headless JSON API with no browser login page.
+         | The framework's default guest redirect resolves route('login') for
+         | any unauthenticated request that does not send an Accept:
+         | application/json header. Because no such route exists here, that
+         | lookup throws RouteNotFoundException from inside the auth middleware
+         | - before the AuthenticationException is even constructed - so the
+         | 401 handler in withExceptions() never runs and the caller receives a
+         | 500 instead of the established JSON envelope. Returning null here
+         | lets the AuthenticationException be thrown and rendered as a 401 for
+         | every Accept header.
+         */
+        $middleware->redirectGuestsTo(fn () => null);
+
+        /*
          | On the global stack, not the api group. The id is useful on every
          | response - authenticated or not, API or not - and the api group is
          | not pre-populated in this application, so appending here is the one

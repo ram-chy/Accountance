@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Auth\ForgotPasswordRequest;
 use App\Support\ApiResponse;
+use App\Support\FrontendUrl;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Password;
 
@@ -18,6 +19,15 @@ class PasswordResetLinkController extends Controller
      */
     public function store(ForgotPasswordRequest $request): JsonResponse
     {
+        /*
+         | Validate the frontend origin before the broker is consulted. The
+         | broker only builds a URL for an address that exists, so checking
+         | afterwards would answer 500 for a known account and 200 for an
+         | unknown one - a misconfigured deployment would leak account
+         | existence. Checking first makes the failure uniform.
+         */
+        FrontendUrl::assertConfigured();
+
         /*
          | The broker's return value distinguishes an unknown address from a
          | delivered mail. It is deliberately discarded so the HTTP response is
