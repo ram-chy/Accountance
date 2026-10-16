@@ -45,7 +45,11 @@ export async function proxy(request: NextRequest): Promise<NextResponse> {
 }
 
 export const config = {
-  // Protect everything except the BFF itself, the login route, and static
-  // assets (any path containing a dot, e.g. `/favicon.ico`).
-  matcher: ["/((?!api|login|_next/static|_next/image|favicon.ico|.*\\..*).*)"],
+  // Protect everything except the BFF itself, the public authentication routes
+  // (the password-recovery screens must be reachable by an unauthenticated
+  // visitor — including from the emailed reset link, which is a full page
+  // load), and static assets (any path containing a dot, e.g. `/favicon.ico`).
+  matcher: [
+    "/((?!api|login|forgot-password|reset-password|_next/static|_next/image|favicon.ico|.*\\..*).*)",
+  ],
 };
