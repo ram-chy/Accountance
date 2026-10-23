@@ -338,7 +338,8 @@ over-count segments) and a rejection is always a 404 so probing reveals nothing.
 company) are injected server-side and can never be supplied or overridden by the
 browser; `Cookie`, `X-Company-Id`, `Authorization` and `Host` from the client are
 dropped. Company-scoped families require an active company and otherwise fail
-with `409` rather than letting Laravel fall back to the user's default. An
+with `403` (matching Laravel's own company-context refusal) rather than letting
+Laravel fall back to the user's default. An
 upstream `401` clears the BFF session; every other status (including Laravel's
 `422` validation errors and `403`/`404`) is passed through, with `X-Request-Id`
 preserved and `Set-Cookie`/`Location` stripped. The browser reaches it through

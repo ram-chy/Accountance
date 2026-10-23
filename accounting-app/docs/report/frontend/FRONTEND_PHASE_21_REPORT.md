@@ -9,6 +9,34 @@
 > `[build]` production build · `[live]` exercised against running frontend/BFF/Laravel ·
 > `[manual]` manually inspected · `[not verified]` evidence unavailable.
 
+> **Post-release corrections (2026-10-17).** Later backend work (commit
+> `aecede2`, "Backend release remediation") and a read-only release audit
+> (`CONTROLLED_RELEASE_AUDIT_REPORT.md`) superseded parts of this report.
+> The body below is preserved as the historical Phase 21 record; the following
+> statements are corrected:
+>
+> - **F-2 is resolved.** The emailed password-reset link now targets the SPA at
+>   `{FRONTEND_URL}/reset-password?token=…&email=…`, built from configuration in
+>   `App\Support\FrontendUrl`; it no longer points at the API probe. The API
+>   token probe `GET /api/auth/reset-password/{token}` is retained unchanged.
+> - **F-3 is resolved.** Unauthenticated API requests now return the 401 JSON
+>   envelope for every `Accept` header (`bootstrap/app.php`); the missing
+>   `login`-route lookup was removed via `redirectGuestsTo(fn () => null)`.
+> - **The 409 narrative is superseded.** The backend does **not** return 409 for
+>   a missing company: `ResolveCompanyContext` returns **403**
+>   ("No company is associated with your account…"). The
+>   `409 "Select a company before making this request."` was emitted only by this
+>   project's BFF proxy and has since been aligned to **403**
+>   (`src/app/api/backend/[...path]/route.ts`) so both layers agree. No frontend
+>   code ever branched on a 409, so this was a contract/documentation issue, not
+>   a UI defect.
+> - **§5 inventory correction:** there is no `POST /journals/{id}/void` route in
+>   the backend or the frontend client; only `POST /journals/{id}/post` exists.
+> - **Route-count note:** the companion backend remediation report recorded
+>   **216** routes; a re-measurement on 2026-10-17 gives **215**
+>   (`php artisan route:list --json`), with `password.reset` and
+>   `auth.password.reset` still registered.
+
 ---
 
 ## 1. Executive summary
@@ -107,7 +135,7 @@ data modules.
 | Company admin | `/companies/new`, `/settings/company`, `/settings/company/members` | `GET/POST /companies`, `POST /companies/{id}/switch`, member ops, `GET/PUT /company`, `/company/settings` | `{…}` | `[tests]` company-create-form | `[live]` |
 | Users | `/settings/users` | `GET/POST/PUT/DELETE /users` | `{…}` | `[tests]` users validators | `[live]` |
 | Chart of accounts | `/accounts`, `/accounts/types` | `GET/POST /accounts`, `GET /accounts/types`, `GET /accounts/{id}/balance` | flat `data` array | `[tests]` accounts validators (19) | `[live]` |
-| Journals | `/journals` | `GET/POST/PUT /journals`, `POST /journals/{id}/{post,void}` | flat `data` array | `[tests]` | `[live]` |
+| Journals | `/journals` | `GET/POST/PUT /journals`, `POST /journals/{id}/post` | flat `data` array | `[tests]` | `[live]` |
 | Periods / fiscal years | `/periods`, `/financial-years` | `GET /accounting/{periods,financial-years}` | flat `data` array | `[tests]` | `[live]` |
 | Reports | `/reports/{trial-balance,profit-loss,balance-sheet,general-ledger,cash-bank,receivables,payables,…}` (11) | `GET /accounting/reports/*` (and `GET /accounting/trial-balance`) | object (`period,base_currency,rows,totals`) | `[tests]` reports api + views | `[live]` |
 | Dashboard | `/` | reports + journals + cash-bank | mixed | `[tests]` partly | `[live]` page load |
@@ -418,7 +446,7 @@ to build it.
 | Visual / responsive / keyboard-accessibility verification | No browser-automation or screenshot tooling is available in this environment; the brief requires stating this rather than inferring success from a build (§10). |
 | Console-error / unhandled-rejection monitoring in a real browser | Same tooling limitation (see §13 for what the server log did reveal). |
 | Production deployment verification (layer 6) | No deployed environment exists/was authorised. |
-| Accounting-document posting workflows (create/post/void journal, invoice, note, receipt…) | Would create business records; not authorised for exploratory verification (§6.2). Documented as a residual gap. |
+| Accounting-document posting workflows (create/post journal, invoice, note, receipt…) | Would create business records; not authorised for exploratory verification (§6.2). Documented as a residual gap. |
 | Session/JWT expiry behaviour | Would require waiting out the TTL; not exercised. `[source]`-verified only. |
 | Direct cross-company `GET` using a real foreign company id | Not exercised directly; bracketed by `[live]` foreign-switch `403`, bogus-id `404`, and the `[live]` proof that the client cannot inject `X-Company-Id`. |
 | Rate-limit (`429`) behaviour | Throttle middleware confirmed `[source]`; a `429` was not deliberately triggered. |

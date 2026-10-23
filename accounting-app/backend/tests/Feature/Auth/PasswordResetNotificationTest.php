@@ -182,6 +182,35 @@ class PasswordResetNotificationTest extends TestCase
         Notification::assertNothingSent();
     }
 
+    public function test_a_missing_frontend_origin_returns_a_sanitised_body_when_debug_is_disabled(): void
+    {
+        Notification::fake();
+
+        // Production runs with APP_DEBUG=false. The deployment fault must not
+        // leak the exception class, its message or a stack trace to the client;
+        // it degrades to the same generic 500 envelope as any other unexpected
+        // error, and still does so identically for known and unknown addresses.
+        config(['frontend.url' => null, 'app.debug' => false]);
+
+        $user = User::factory()->create(['email' => 'user@example.com']);
+
+        $responses = [
+            $this->postJson('/api/auth/forgot-password', ['email' => $user->email]),
+            $this->postJson('/api/auth/forgot-password', ['email' => 'nobody@example.com']),
+        ];
+
+        foreach ($responses as $response) {
+            $response
+                ->assertStatus(500)
+                ->assertExactJson([
+                    'success' => false,
+                    'message' => 'An unexpected error occurred.',
+                ]);
+        }
+
+        Notification::assertNothingSent();
+    }
+
     /**
      * @return array<string, array{0: string}>
      */

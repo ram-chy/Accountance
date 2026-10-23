@@ -45,10 +45,18 @@ debug trace. Proven by stack trace at `ApplicationBuilder.php:291`
 | Focused remediation suites (A/B/C/D) | **44 passed, 0 failed — 172 assertions** |
 | Full backend suite | **1268 passed, 0 failed, 0 skipped — 5646 assertions** (927.9 s) |
 | Pint (`vendor/bin/pint --test`) | **Passed** (`laravel` preset; one empty-body style fix applied to a new exception class) |
-| Routes | **216** (named route `password.reset` preserved) |
+| Routes | **215** (named route `password.reset` preserved) |
 | Custom commands | **2** (`app:sync-roles`, `app:create-admin`) |
 | Live check (B) | **401 JSON for `application/json`, `*/*`, `text/html` and no `Accept`** |
 | **Final classification** | **READY WITH DOCUMENTED LIMITATIONS** |
+
+> **Correction (2026-10-17).** The route count above was recorded as 216 when
+> this report was written; a re-measurement during the controlled release audit
+> gives **215** (`php artisan route:list --json`), with both `password.reset` and
+> `auth.password.reset` still registered. The discrepancy is a counting-method
+> artefact. The audit did not independently re-run this report's test suites, so
+> its other figures remain as originally reported (see the audit report's
+> "checks not performed" section).
 
 ---
 
@@ -386,7 +394,7 @@ full suite executes.
 | Pint (`vendor/bin/pint --test`) | **Passed** (`laravel` preset; one empty-body style fix applied to a new exception class) | `[build]` |
 | Focused suites re-run **after** the Pint fix | **44 passed, 0 failed** | `[tests]` |
 | `migrate` / `migrate:fresh` | **Clean — stale blockers removed** | `[tests]` |
-| Routes | **216**; `password.reset` and `auth.password.reset` both present | `[live]` |
+| Routes | **215**; `password.reset` and `auth.password.reset` both present | `[live]` |
 | Commands | `app:sync-roles`, `app:create-admin` both registered | `[live]` |
 | Unauthenticated API errors (4 `Accept` variants × 3 endpoints) | **401 JSON envelope, no leak** | `[live]` `[tests]` |
 | Diff reviewed, git status understood | **Yes** | `[source]` |

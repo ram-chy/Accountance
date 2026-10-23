@@ -73,11 +73,13 @@ async function proxyRequest(
 
   // Company-scoped routes must never be forwarded without an explicit active
   // company: the backend would otherwise fall back to the user's default and a
-  // write could land against the wrong company.
+  // write could land against the wrong company. Answer 403 so this refusal is
+  // consistent with Laravel's own company-context refusal (403) rather than
+  // inventing a status the backend never uses for this case.
   if (validation.requiresCompany && session.companyId === undefined) {
     return jsonFailure(
       "Select a company before making this request.",
-      409,
+      403,
     );
   }
 

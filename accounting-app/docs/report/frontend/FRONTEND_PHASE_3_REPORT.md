@@ -34,7 +34,7 @@
 | Route families / prefixes | `routes/api.php` |
 | `X-Company-Id` is a hint validated against membership + active state | `CompanyContext.php`, `ResolveCompanyContext.php` |
 | Company-scoped group is guarded by `company.context`; `users`/`companies` are authenticated but not company-scoped | `routes/api.php`, `bootstrap/app.php` |
-| `403` = exists but not a member; `404` = not found; `409`/no-default = "no company" | `ResolveCompanyContext.php` |
+| `403` = exists but not a member, or no active company; `404` = not found | `ResolveCompanyContext.php` (the BFF mirrors the `403` for "no company") |
 | Every response carries `X-Request-Id` | `AssignRequestId.php` |
 | Envelope `{success,message,data?}` / `{success:false,message,errors?}` | `ApiResponse.php` |
 
@@ -74,7 +74,8 @@ Thin shell over the policy:
 2. Require a valid encrypted session cookie, else `401`.
 3. Validate the path; reject unknown/traversal with `404`.
 4. For a company-scoped family with no active company in the session →
-   `409` (never forward and let Laravel fall back to the user's default).
+   `403` (never forward and let Laravel fall back to the user's default; this
+   matches Laravel's own company-context refusal).
 5. Build the URL + headers server-side; `Authorization` from the cookie,
    `X-Company-Id` from the server-side active company.
 6. Forward server-to-server, then pass the status and body through unchanged.
